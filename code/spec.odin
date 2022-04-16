@@ -200,11 +200,11 @@ create_is_character_in_set_checker_fn :: proc(characters: string) -> fn_type_i32
 		character := Arg_i32()
 		for ch in characters
 		{
-			i := If(Eq(character, value_from_i32(i32(ch))))
+			If(Eq(character, value_from_i32(i32(ch))))
 			{
 				Return(value_from_i8(1))
 			}
-			End_If(i)
+			End_If()
 		}
 		Return(value_from_i8(0))
 	}
@@ -387,12 +387,12 @@ mass_spec :: proc()
 			option_value := Arg(descriptor_pointer_to(&option_i64_descriptor))
 			default_value := Arg_i64()
 			some := MaybeCastToTag("Some", option_value)
-			i := If(some)
+			If(some)
 			{
 				value := StructField(some, "value")
 				Return(value)
 			}
-			End_If(i)
+			End_If()
 			Return(default_value)
 		}
 		End_Function()
@@ -505,16 +505,16 @@ mass_spec :: proc()
 			
 			item_byte_size := descriptor_byte_size(array_pointer_descriptor.pointer_to.array.item)
 			
-			o := Loop()
+			Loop()
 			{
 				// TODO check that the descriptor is indeed an array
 				length := i32(array_pointer_descriptor.pointer_to.array.length)
 				
-				i := If(Greater(index, value_from_i32(length - 1)))
+				If(Greater(index, value_from_i32(length - 1)))
 				{
-					Break(&o)
+					Break()
 				}
-				End_If(i)
+				End_If()
 				
 				reg_a := value_register_for_descriptor(.A, array_pointer_descriptor)
 				move_value(f, reg_a, temp)
@@ -534,9 +534,9 @@ mass_spec :: proc()
 				
 				push_instruction(f, {inc, {index.operand, {}, {}}, nil})
 				
-				Continue(&o)
+				Continue()
 			}
-			End_Loop(o)
+			End_Loop()
 		}
 		End_Function()
 		

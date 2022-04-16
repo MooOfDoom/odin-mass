@@ -108,19 +108,19 @@ function_spec :: proc()
 			result := Stack_i32()
 			end_label := make_label()
 			
-			i := If(Eq(number, value_from_i32(42)))
+			If(Eq(number, value_from_i32(42)))
 			{
 				Assign(result, number)
 				Goto(end_label)
 			}
-			End_If(i)
+			End_If()
 			
-			i = If(Less(number, value_from_i32(42)))
+			If(Less(number, value_from_i32(42)))
 			{
 				Assign(result, value_from_i32(0))
 				Goto(end_label)
 			}
-			End_If(i)
+			End_If()
 			
 			Assign(result, value_from_i32(100))
 			
@@ -309,11 +309,11 @@ function_spec :: proc()
 		{
 			x := Arg_i32()
 			
-			i := If(Eq(x, value_from_i32(0)))
+			If(Eq(x, value_from_i32(0)))
 			{
 				Return(value_from_i32(0))
 			}
-			End_If(i)
+			End_If()
 			
 			Return(value_from_i32(1))
 		}
@@ -517,16 +517,16 @@ function_spec :: proc()
 		fib, g := Function()
 		{
 			n := Arg_i64()
-			i := If(Eq(n, value_from_i64(0)))
+			If(Eq(n, value_from_i64(0)))
 			{
 				Return(value_from_i64(0))
 			}
-			End_If(i)
-			i = If(Eq(n, value_from_i64(1)))
+			End_If()
+			If(Eq(n, value_from_i64(1)))
 			{
 				Return(value_from_i64(1))
 			}
-			End_If(i)
+			End_If()
 			
 			minus_one := Minus(n, value_from_i64(1))
 			minus_two := Minus(n, value_from_i64(2))

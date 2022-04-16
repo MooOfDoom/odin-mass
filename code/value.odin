@@ -348,7 +348,7 @@ imm64 :: proc
 imm_auto_i32 :: proc(value: i32) -> Operand
 {
 	unsigned_value := u32(value)
-	if unsigned_value <= 0xff
+	if unsigned_value <= 0x7f
 	{
 		return imm8(i8(value))
 	}
