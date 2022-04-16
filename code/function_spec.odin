@@ -106,46 +106,28 @@ function_spec :: proc()
 		{
 			number := Arg_i32()
 			result := Stack_i32()
-			end_label := make_label()
 			
-			If(Eq(number, value_from_i32(42)))
+			Match()
 			{
-				Assign(result, number)
-				Goto(end_label)
+				Case(Eq(number, value_from_i32(42)))
+				{
+					Assign(result, number)
+				}
+				End_Case()
+				Case(Less(number, value_from_i32(42)))
+				{
+					Assign(result, value_from_i32(0))
+				}
+				End_Case()
+				CaseAny()
+				{
+					Assign(result, value_from_i32(100))
+				}
+				End_CaseAny()
 			}
-			End_If()
+			End_Match()
 			
-			If(Less(number, value_from_i32(42)))
-			{
-				Assign(result, value_from_i32(0))
-				Goto(end_label)
-			}
-			End_If()
-			
-			Assign(result, value_from_i32(100))
-			
-			Label_(end_label)
 			Return(result)
-			
-			// m := Match()
-			// {
-			// 	c := Case(Eq(number, value_from_i32(42)))
-			// 	{
-			// 		Return(number)
-			// 	}
-			// 	End_Case(c)
-			// 	c = Case(Less(number, value_from_i32(42))
-			// 	{
-			// 		Return(value_from_i32(0))
-			// 	}
-			// 	End_Case(c)
-			// 	c = CaseAny()
-			// 	{
-			// 		Return(value_from_i32(100))
-			// 	}
-			// 	End_Case(c)
-			// }
-			// End_Match(m)
 		}
 		End_Function()
 		

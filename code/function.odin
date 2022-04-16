@@ -249,39 +249,6 @@ fn_return :: proc(builder: ^Fn_Builder, to_return: ^Value)
 	push_instruction(builder, {jmp, {label32(builder.epilog_label), {}, {}}, nil})
 }
 
-label_ :: proc(builder: ^Fn_Builder, label: ^Label)
-{
-	push_instruction(builder, {maybe_label = label})
-}
-
-goto :: proc(builder: ^Fn_Builder, label: ^Label)
-{
-	push_instruction(builder, {jmp, {label32(label), {}, {}}, nil})
-}
-
-make_if :: proc(builder: ^Fn_Builder, value: ^Value) -> ^Label
-{
-	label := make_label()
-	byte_size := descriptor_byte_size(value.descriptor)
-	if byte_size == 4 || byte_size == 8
-	{
-		push_instruction(builder, {cmp, {value.operand, imm32(0), {}}, nil})
-	}
-	else if byte_size == 1
-	{
-		push_instruction(builder, {cmp, {value.operand, imm8(0), {}}, nil})
-	}
-	else
-	{
-		assert(false, "Unsupported value inside `if`")
-	}
-	
-	push_instruction(builder, {jz, {label32(label), {}, {}}, nil})
-	return label
-}
-
-end_if :: label_
-
 assert_not_register_ax :: proc(value: ^Value)
 {
 	assert(value != nil, "value != nil")
@@ -568,6 +535,51 @@ call_function_value :: proc(builder: ^Fn_Builder, to_call: ^Value, args: ..^Valu
 	return nil
 }
 
+label_ :: proc(builder: ^Fn_Builder, label: ^Label)
+{
+	push_instruction(builder, {maybe_label = label})
+}
+
+goto :: proc(builder: ^Fn_Builder, label: ^Label)
+{
+	push_instruction(builder, {jmp, {label32(label), {}, {}}, nil})
+}
+
+make_if :: proc(builder: ^Fn_Builder, value: ^Value) -> ^Label
+{
+	label := make_label()
+	byte_size := descriptor_byte_size(value.descriptor)
+	if byte_size == 4 || byte_size == 8
+	{
+		push_instruction(builder, {cmp, {value.operand, imm32(0), {}}, nil})
+	}
+	else if byte_size == 1
+	{
+		push_instruction(builder, {cmp, {value.operand, imm8(0), {}}, nil})
+	}
+	else
+	{
+		assert(false, "Unsupported value inside `if`")
+	}
+	
+	push_instruction(builder, {jz, {label32(label), {}, {}}, nil})
+	return label
+}
+
+end_if :: label_
+
+make_match :: make_label
+
+end_match :: label_
+
+make_case :: make_if
+
+end_case :: proc(builder: ^Fn_Builder, end_match_label: ^Label, end_case_label: ^Label)
+{
+	goto(builder, end_match_label)
+	label_(builder, end_case_label)
+}
+
 Loop_Builder :: struct
 {
 	label_start: ^Label,
@@ -645,9 +657,9 @@ Function_Context :: struct
 {
 	builder:     Fn_Builder,
 	if_stack:    [dynamic]^Label,
-	loop_stack:  [dynamic]Loop_Builder,
 	match_stack: [dynamic]^Label,
 	case_stack:  [dynamic]^Label,
+	loop_stack:  [dynamic]Loop_Builder,
 }
 
 get_builder_from_context :: proc() -> ^Fn_Builder
@@ -660,11 +672,6 @@ get_if_stack_from_context :: proc() -> ^[dynamic]^Label
 	return &(cast(^Function_Context)context.user_ptr).if_stack
 }
 
-get_loop_stack_from_context :: proc() -> ^[dynamic]Loop_Builder
-{
-	return &(cast(^Function_Context)context.user_ptr).loop_stack
-}
-
 get_match_stack_from_context :: proc() -> ^[dynamic]^Label
 {
 	return &(cast(^Function_Context)context.user_ptr).match_stack
@@ -673,6 +680,11 @@ get_match_stack_from_context :: proc() -> ^[dynamic]^Label
 get_case_stack_from_context :: proc() -> ^[dynamic]^Label
 {
 	return &(cast(^Function_Context)context.user_ptr).case_stack
+}
+
+get_loop_stack_from_context :: proc() -> ^[dynamic]Loop_Builder
+{
+	return &(cast(^Function_Context)context.user_ptr).loop_stack
 }
 
 //
@@ -693,13 +705,6 @@ End_Function :: proc()
 	builder := get_builder_from_context()
 	
 	fn_end(builder)
-}
-
-PointerTo :: proc(value: ^Value) -> ^Value
-{
-	builder := get_builder_from_context()
-	
-	return value_pointer_to(builder, value)
 }
 
 Return :: proc(to_return: ^Value)
@@ -741,6 +746,13 @@ Assign :: proc(dest: ^Value, source: ^Value)
 	builder := get_builder_from_context()
 	
 	move_value(builder, dest, source)
+}
+
+PointerTo :: proc(value: ^Value) -> ^Value
+{
+	builder := get_builder_from_context()
+	
+	return value_pointer_to(builder, value)
 }
 
 Call :: proc(to_call: ^Value, args: ..^Value) -> ^Value
@@ -816,7 +828,7 @@ Goto :: proc(label: ^Label)
 
 If :: proc(value: ^Value)
 {
-	builder := get_builder_from_context()
+	builder  := get_builder_from_context()
 	if_stack := get_if_stack_from_context()
 	
 	label := make_if(builder, value)
@@ -825,16 +837,57 @@ If :: proc(value: ^Value)
 
 End_If :: proc(loc := #caller_location)
 {
-	builder := get_builder_from_context()
+	builder  := get_builder_from_context()
 	if_stack := get_if_stack_from_context()
 	
 	label := pop_array(if_stack, loc)
 	label_(builder, label)
 }
 
+Match :: proc()
+{
+	match_stack := get_match_stack_from_context()
+	
+	label := make_match()
+	append(match_stack, label)
+}
+
+End_Match :: proc(loc := #caller_location)
+{
+	builder     := get_builder_from_context()
+	match_stack := get_match_stack_from_context()
+	
+	label := pop_array(match_stack, loc)
+	end_match(builder, label)
+}
+
+Case :: proc(value: ^Value)
+{
+	builder    := get_builder_from_context()
+	case_stack := get_case_stack_from_context()
+	
+	label := make_case(builder, value)
+	append(case_stack, label)
+}
+
+End_Case :: proc(loc := #caller_location)
+{
+	builder     := get_builder_from_context()
+	match_stack := get_match_stack_from_context()
+	case_stack  := get_case_stack_from_context()
+	
+	end_match_label := peek_array(match_stack, loc)
+	end_case_label  := pop_array(case_stack, loc)
+	end_case(builder, end_match_label, end_case_label)
+}
+
+CaseAny :: proc() {}
+
+End_CaseAny :: proc() {}
+
 Loop :: proc()
 {
-	builder := get_builder_from_context()
+	builder    := get_builder_from_context()
 	loop_stack := get_loop_stack_from_context()
 	
 	loop := loop_start(builder)
@@ -843,7 +896,7 @@ Loop :: proc()
 
 End_Loop :: proc(loc := #caller_location)
 {
-	builder := get_builder_from_context()
+	builder    := get_builder_from_context()
 	loop_stack := get_loop_stack_from_context()
 	
 	loop := pop_array(loop_stack, loc)
@@ -852,7 +905,7 @@ End_Loop :: proc(loc := #caller_location)
 
 Continue :: proc(loc := #caller_location)
 {
-	builder := get_builder_from_context()
+	builder    := get_builder_from_context()
 	loop_stack := get_loop_stack_from_context()
 	
 	loop := peek_array(loop_stack, loc)
@@ -861,7 +914,7 @@ Continue :: proc(loc := #caller_location)
 
 Break :: proc(loc := #caller_location)
 {
-	builder := get_builder_from_context()
+	builder    := get_builder_from_context()
 	loop_stack := get_loop_stack_from_context()
 	
 	loop := peek_array(loop_stack, loc)
@@ -909,17 +962,3 @@ Or :: proc(a: ^Value, b: ^Value) -> ^Value
 	
 	return make_or(builder, a, b)
 }
-
-// Match :: make_label
-
-// end_match :: proc(builder: ^Fn_Builder, label: ^Label)
-// {
-	
-// }
-
-// End_Match :: proc(label: ^Label)
-// {
-// 	builder := get_builder_from_context()
-	
-// 	end_match(builder, label)
-// }
