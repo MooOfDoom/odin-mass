@@ -637,19 +637,9 @@ make_or :: proc(builder: ^Fn_Builder, a: ^Value, b: ^Value) -> ^Value
 //
 //
 
-pop_array :: proc(arr: ^[dynamic]$E, loc := #caller_location) -> E
+peek :: proc(arr: ^[dynamic]$E, loc := #caller_location) -> E
 {
-	assert(len(arr) > 0, "Pop from empty array", loc)
-	result := arr^[len(arr^) - 1]
-	raw_arr := transmute(mem.Raw_Dynamic_Array)arr^
-	raw_arr.len -= 1
-	arr^ = transmute([dynamic]E)raw_arr
-	return result
-}
-
-peek_array :: proc(arr: ^[dynamic]$E, loc := #caller_location) -> E
-{
-	assert(len(arr) > 0, "Peek at empty array", loc)
+	assert(len(arr^) > 0, "Peek at empty array", loc)
 	return arr^[len(arr^) - 1]
 }
 
@@ -693,16 +683,24 @@ get_loop_stack_from_context :: proc() -> ^[dynamic]Loop_Builder
 
 Function :: proc() -> (^Value, ^Fn_Builder)
 {
-	fn_context := cast(^Function_Context)context.user_ptr
-	
+	builder := get_builder_from_context()
 	result: ^Value
-	result, fn_context.builder = fn_begin(&function_buffer)
-	return result, &fn_context.builder
+	result, builder^ = fn_begin(&function_buffer)
+	return result, builder
 }
 
-End_Function :: proc()
+End_Function :: proc(loc := #caller_location)
 {
-	builder := get_builder_from_context()
+	builder     := get_builder_from_context()
+	if_stack    := get_if_stack_from_context()
+	match_stack := get_match_stack_from_context()
+	case_stack  := get_case_stack_from_context()
+	loop_stack  := get_loop_stack_from_context()
+	
+	assert(len(if_stack)    == 0, "Unmatched If in function",    loc)
+	assert(len(match_stack) == 0, "Unmatched Match in function", loc)
+	assert(len(case_stack)  == 0, "Unmatched Case in function",  loc)
+	assert(len(loop_stack)  == 0, "Unmatched Loop in function",  loc)
 	
 	fn_end(builder)
 }
@@ -840,7 +838,7 @@ End_If :: proc(loc := #caller_location)
 	builder  := get_builder_from_context()
 	if_stack := get_if_stack_from_context()
 	
-	label := pop_array(if_stack, loc)
+	label := pop(if_stack, loc)
 	label_(builder, label)
 }
 
@@ -857,7 +855,7 @@ End_Match :: proc(loc := #caller_location)
 	builder     := get_builder_from_context()
 	match_stack := get_match_stack_from_context()
 	
-	label := pop_array(match_stack, loc)
+	label := pop(match_stack, loc)
 	end_match(builder, label)
 }
 
@@ -876,8 +874,8 @@ End_Case :: proc(loc := #caller_location)
 	match_stack := get_match_stack_from_context()
 	case_stack  := get_case_stack_from_context()
 	
-	end_match_label := peek_array(match_stack, loc)
-	end_case_label  := pop_array(case_stack, loc)
+	end_match_label := peek(match_stack, loc)
+	end_case_label  := pop(case_stack, loc)
 	end_case(builder, end_match_label, end_case_label)
 }
 
@@ -899,7 +897,7 @@ End_Loop :: proc(loc := #caller_location)
 	builder    := get_builder_from_context()
 	loop_stack := get_loop_stack_from_context()
 	
-	loop := pop_array(loop_stack, loc)
+	loop := pop(loop_stack, loc)
 	loop_end(builder, loop)
 }
 
@@ -908,7 +906,7 @@ Continue :: proc(loc := #caller_location)
 	builder    := get_builder_from_context()
 	loop_stack := get_loop_stack_from_context()
 	
-	loop := peek_array(loop_stack, loc)
+	loop := peek(loop_stack, loc)
 	goto(builder, loop.label_start)
 }
 
@@ -917,7 +915,7 @@ Break :: proc(loc := #caller_location)
 	builder    := get_builder_from_context()
 	loop_stack := get_loop_stack_from_context()
 	
-	loop := peek_array(loop_stack, loc)
+	loop := peek(loop_stack, loc)
 	goto(builder, loop.label_end)
 }
 
