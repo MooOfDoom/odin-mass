@@ -1,0 +1,567 @@
+package main
+
+import "core:sys/win32"
+
+DEBUG_PRINT :: true
+
+fn_reflect :: proc(builder: ^Fn_Builder, descriptor: ^Descriptor) -> ^Value
+{
+	result := reserve_stack(builder, &descriptor_struct_reflection)
+	// FIXME support all types
+	assert(descriptor.type == .Struct)
+	// FIXME support generic allocation of structs on the stack
+	move_value(builder, result, value_from_i32(i32(len(descriptor.struct_.fields))))
+	return result
+}
+
+Struct_Builder_Field :: struct
+{
+	struct_field: Descriptor_Struct_Field,
+	next:         ^Struct_Builder_Field,
+}
+
+Struct_Builder :: struct
+{
+	offset:      i32,
+	field_count: u32,
+	max_size:    i32,
+	field_list:  ^Struct_Builder_Field,
+}
+
+struct_begin :: proc() -> Struct_Builder
+{
+	return Struct_Builder{}
+}
+
+struct_add_field :: proc(builder: ^Struct_Builder, descriptor: ^Descriptor, name: string) -> ^Descriptor_Struct_Field
+{
+	size := descriptor_byte_size(descriptor)
+	builder.max_size = max(builder.max_size, size)
+	builder.offset = align(builder.offset, size)
+	builder_field := new_clone(Struct_Builder_Field \
+	{
+		struct_field =
+		{
+			name       = name,
+			descriptor = descriptor,
+			offset     = builder.offset,
+		},
+		next = builder.field_list,
+	})
+	builder.offset      += size
+	builder.field_count += 1
+	builder.field_list   = builder_field
+	
+	return &builder_field.struct_field
+}
+
+struct_end :: proc(builder: ^Struct_Builder) -> ^Descriptor
+{
+	assert(builder.field_count > 0, "Struct has at least one field")
+	
+	builder.offset = align(builder.offset, builder.max_size)
+	
+	result := new_clone(Descriptor \
+	{
+		type = .Struct,
+		struct_ =
+		{
+			fields = make([]Descriptor_Struct_Field, builder.field_count),
+		},
+	})
+	fields := result.struct_.fields
+	
+	index := builder.field_count - 1
+	
+	for field := builder.field_list; field != nil; field = field.next
+	{
+		fields[index] = field.struct_field
+		index -= 1
+	}
+	
+	return result
+}
+
+ensure_memory :: proc(value: ^Value) -> ^Value
+{
+	operand := value.operand
+	if operand.type == .Memory_Indirect do return value
+	if value.descriptor.type != .Pointer do assert(false, "Not implemented")
+	if value.operand.type != .Register do assert(false, "Not implemented")
+	return new_clone(Value \
+	{
+		descriptor = value.descriptor.pointer_to,
+		operand =
+		{
+			type = .Memory_Indirect,
+			indirect =
+			{
+				reg = value.operand.reg,
+				displacement = 0,
+			},
+		},
+	})
+}
+
+struct_get_field :: proc(struct_value: ^Value, name: string) -> ^Value
+{
+	struct_value := ensure_memory(struct_value)
+	descriptor := struct_value.descriptor
+	assert(descriptor.type == .Struct, "Can only get fields of structs")
+	for field in &descriptor.struct_.fields
+	{
+		if field.name == name
+		{
+			operand := struct_value.operand
+			// FIXME support more operands
+			assert(operand.type == .Memory_Indirect)
+			operand.indirect.displacement += field.offset
+			operand.byte_size = descriptor_byte_size(field.descriptor)
+			result := new_clone(Value \
+			{
+				descriptor = field.descriptor,
+				operand    = operand,
+			})
+			return result
+		}
+	}
+	
+	assert(false, "Could not find a field with specified name")
+	return nil
+}
+
+maybe_cast_to_tag :: proc(builder: ^Fn_Builder, name: string, value: ^Value) -> ^Value
+{
+	assert(value.descriptor.type == .Pointer)
+	descriptor := value.descriptor.pointer_to
+	
+	// FIXME
+	assert(value.operand.type == .Register)
+	tag := Value \
+	{
+		descriptor = &descriptor_i64,
+		operand =
+		{
+			type = .Memory_Indirect,
+			byte_size = size_of(i64),
+			indirect =
+			{
+				reg          = value.operand.reg,
+				displacement = 0,
+			},
+		},
+	}
+	
+	for struct_, i in &descriptor.tagged_union.structs
+	{
+		if struct_.name == name
+		{
+			constructor_descriptor := new_clone(Descriptor \
+			{
+				type = .Struct,
+				struct_ = struct_,
+			})
+			pointer_descriptor := descriptor_pointer_to(constructor_descriptor)
+			result := new_clone(Value \
+			{
+				descriptor = pointer_descriptor,
+				operand = rbx,
+			})
+			
+			move_value(builder, result, value_from_i64(0))
+			
+			comparison := compare(builder, .Equal, &tag, value_from_i64(i64(i)))
+			label := make_if(builder, comparison)
+			{
+				move_value(builder, result, value)
+				sum := plus(builder, result, value_from_i64(size_of(i64)))
+				move_value(builder, result, sum)
+			}
+			push_instruction(builder, {maybe_label = label})
+			return result
+		}
+	}
+	assert(false, "Could not find specified name in tagged union")
+	return nil
+}
+
+MaybeCastToTag :: proc(name: string, value: ^Value) -> ^Value
+{
+	builder := cast(^Fn_Builder)context.user_ptr
+	
+	return maybe_cast_to_tag(builder, name, value)
+}
+
+create_is_character_in_set_checker_fn :: proc(characters: string) -> fn_type_i32_to_i8
+{
+	assert(characters != "")
+	checker, f := Function()
+	{
+		character := Arg_i32()
+		for ch in characters
+		{
+			i := If(Eq(character, value_from_i32(i32(ch))))
+			{
+				Return(value_from_i8(1))
+			}
+			End_If(i)
+		}
+		Return(value_from_i8(0))
+	}
+	End_Function()
+	return value_as_function(checker, fn_type_i32_to_i8)
+}
+
+mass_spec :: proc()
+{
+	spec("mass")
+	
+	temp_buffer := make_buffer(1024 * 1024, win32.PAGE_READWRITE)
+	context.allocator = buffer_allocator(&temp_buffer)
+	
+	fn_context: Function_Context
+	context.user_ptr = &fn_context
+	
+	before_each(proc()
+	{
+		function_buffer = make_buffer(128 * 1024, win32.PAGE_EXECUTE_READWRITE)
+		free_all()
+	})
+	
+	after_each(proc()
+	{
+		free_buffer(&function_buffer)
+	})
+	
+	it("should have a way to create a function to check if a character is one of the provided set", proc()
+	{
+		is_whitespace := create_is_character_in_set_checker_fn(" \n\r\t")
+		check(bool(is_whitespace(' ')))
+		check(bool(is_whitespace('\n')))
+		check(bool(is_whitespace('\r')))
+		check(bool(is_whitespace('\t')))
+		check(!bool(is_whitespace('a')))
+		check(!bool(is_whitespace('2')))
+		check(!bool(is_whitespace('-')))
+	})
+	
+	it("should support returning structs larger than 64 bits on the stack", proc()
+	{
+		struct_builder := struct_begin()
+		struct_add_field(&struct_builder, &descriptor_i64, "x")
+		struct_add_field(&struct_builder, &descriptor_i64, "y")
+		point_struct_descriptor := struct_end(&struct_builder)
+		
+		return_value: Value =
+		{
+			descriptor = point_struct_descriptor,
+			operand =
+			{
+				type = .Memory_Indirect,
+				byte_size = 1, // NOTE(Lothar): Shouldn't matter, but must be 1, 2, 4, or 8 for lea
+				indirect =
+				{
+					reg          = rsp.reg,
+					displacement = 0,
+				},
+			},
+		}
+		
+		c_test_fn_descriptor: Descriptor =
+		{
+			type = .Function,
+			function =
+			{
+				returns = &return_value,
+			},
+		}
+		
+		c_test_fn_value: Value =
+		{
+			descriptor = &c_test_fn_descriptor,
+			operand = imm64(rawptr(test)),
+		}
+		
+		checker_value, f := Function()
+		{
+			test_result := Call(&c_test_fn_value)
+			x := StructField(test_result, "x")
+			Return(x)
+		}
+		End_Function()
+		
+		checker := value_as_function(checker_value, fn_void_to_i64)
+		check(checker() == 42)
+	})
+	
+	it("should support RIP-relative addressing", proc()
+	{
+		buffer_append(&function_buffer, i32(42))
+		rip: Value =
+		{
+			descriptor = &descriptor_i32,
+			operand =
+			{
+				type = .RIP_Relative,
+				byte_size = size_of(i32),
+				imm64 = i64(uintptr(rawptr(&function_buffer.memory[0]))),
+			},
+		}
+		
+		return_42, f := Function()
+		{
+			Return(&rip)
+		}
+		End_Function()
+		
+		checker := value_as_function(return_42, fn_void_to_i32)
+		check(checker() == 42)
+	})
+	
+	it("should support sizeof operator on values", proc()
+	{
+		sizeof_i32 := SizeOf(value_from_i32(0))
+		check(sizeof_i32.operand.type == .Immediate_32)
+		check(sizeof_i32.operand.imm32 == 4)
+	})
+	
+	it("should support sizeof operator on descriptors", proc()
+	{
+		sizeof_i32 := SizeOfDescriptor(&descriptor_i32)
+		check(sizeof_i32.operand.type == .Immediate_32)
+		check(sizeof_i32.operand.imm32 == 4)
+	})
+	
+	it("should support reflection on structs", proc()
+	{
+		struct_builder := struct_begin()
+		struct_add_field(&struct_builder, &descriptor_i32, "x")
+		struct_add_field(&struct_builder, &descriptor_i32, "y")
+		point_struct_descriptor := struct_end(&struct_builder)
+		
+		field_count, f := Function()
+		{
+			struct_ := Stack(&descriptor_struct_reflection, ReflectDescriptor(point_struct_descriptor))
+			Return(StructField(struct_, "field_count"))
+		}
+		End_Function()
+		
+		result := value_as_function(field_count, fn_void_to_i32)()
+		check(result == 2)
+	})
+	
+	it("should support tagged unions", proc()
+	{
+		some_fields := [?]Descriptor_Struct_Field \
+		{
+			{
+				name       = "value",
+				descriptor = &descriptor_i64,
+				offset     = 0,
+			},
+		}
+		
+		constructors := [?]Descriptor_Struct \
+		{
+			{
+				name = "None",
+				fields = nil,
+			},
+			{
+				name = "Some",
+				fields = some_fields[:],
+			},
+		}
+		
+		option_i64_descriptor: Descriptor =
+		{
+			type = .Tagged_Union,
+			tagged_union =
+			{
+				structs = constructors[:],
+			},
+		}
+		
+		with_default_value, f := Function()
+		{
+			option_value := Arg(descriptor_pointer_to(&option_i64_descriptor))
+			default_value := Arg_i64()
+			some := MaybeCastToTag("Some", option_value)
+			i := If(some)
+			{
+				value := StructField(some, "value")
+				Return(value)
+			}
+			End_If(i)
+			Return(default_value)
+		}
+		End_Function()
+		
+		with_default := value_as_function(with_default_value, fn_rawptr_i64_to_i64)
+		test_none: struct {tag: i64, maybe_value: i64} = {}
+		test_some: struct {tag: i64, maybe_value: i64} = {1, 21}
+		check(with_default(&test_none, 42) == 42)
+		check(with_default(&test_some, 42) == 21)
+	})
+	
+	it("should say that the types are the same for integers of the same size", proc()
+	{
+		check(same_type(&descriptor_i32, &descriptor_i32))
+	})
+	
+	it("should say that the types are not the same for integers of different sizes", proc()
+	{
+		check(!same_type(&descriptor_i64, &descriptor_i32))
+	})
+	
+	it("should say that pointer and i64 are different types", proc()
+	{
+		check(!same_type(&descriptor_i64, descriptor_pointer_to(&descriptor_i64)))
+	})
+	
+	it("should say that (^i64) is not the same as (^i32)", proc()
+	{
+		check(!same_type(descriptor_pointer_to(&descriptor_i64),
+		                 descriptor_pointer_to(&descriptor_i32)))
+	})
+	
+	it("should say that ([2]i64) is not the same as ([2]i32)", proc()
+	{
+		check(!same_type(descriptor_array_of(&descriptor_i64, 2),
+		                 descriptor_array_of(&descriptor_i32, 2)))
+	})
+	
+	it("should say that ([10]i64) is not the same as ([2]i64)", proc()
+	{
+		check(!same_type(descriptor_array_of(&descriptor_i64, 10),
+		                 descriptor_array_of(&descriptor_i64, 2)))
+	})
+	
+	it("should say that structs are different if their descriptors are different pointers)", proc()
+	{
+		struct_builder := struct_begin()
+		struct_add_field(&struct_builder, &descriptor_i32, "x")
+		a := struct_end(&struct_builder)
+		
+		struct_builder = struct_begin()
+		struct_add_field(&struct_builder, &descriptor_i32, "x")
+		b := struct_end(&struct_builder)
+		
+		check(same_type(a, a))
+		check(!same_type(a, b))
+	})
+	
+	it("should support structs", proc()
+	{
+		// Size :: struct { width: i32, height: i32 }
+		
+		struct_builder := struct_begin()
+		
+		width_field  := struct_add_field(&struct_builder, &descriptor_i32, "width")
+		height_field := struct_add_field(&struct_builder, &descriptor_i32, "height")
+		struct_add_field(&struct_builder, &descriptor_i32, "dummy")
+		
+		size_struct_descriptor := struct_end(&struct_builder)
+		
+		size_struct_pointer_descriptor := descriptor_pointer_to(size_struct_descriptor)
+		
+		area, f := Function()
+		{
+			size_struct := Arg(size_struct_pointer_descriptor)
+			Return(Multiply(StructField(size_struct, "width"),
+			                StructField(size_struct, "height")))
+		}
+		End_Function()
+		
+		size: struct {width: i32, height: i32, dummy: i32} = {10, 42, 0}
+		result: i32 = value_as_function(area, fn_rawptr_to_i32)(&size)
+		check(result == 420)
+		check(size_of(size) == struct_builder.offset)
+	})
+	
+	it("should add 1 to all numbers in an array", proc()
+	{
+		array := [?]i32{1, 2, 3}
+		
+		array_descriptor: Descriptor =
+		{
+			type = .Fixed_Size_Array,
+			array =
+			{
+				item   = &descriptor_i32,
+				length = len(array),
+			},
+		}
+		
+		array_pointer_descriptor := descriptor_pointer_to(&array_descriptor)
+		
+		increment, f := Function()
+		{
+			arr := Arg(array_pointer_descriptor)
+			
+			index := Stack_i32(value_from_i32(0))
+			
+			temp := Stack(array_pointer_descriptor, arr)
+			
+			item_byte_size := descriptor_byte_size(array_pointer_descriptor.pointer_to.array.item)
+			
+			o := Loop()
+			{
+				// TODO check that the descriptor is indeed an array
+				length := i32(array_pointer_descriptor.pointer_to.array.length)
+				
+				i := If(Greater(index, value_from_i32(length - 1)))
+				{
+					Break(&o)
+				}
+				End_If(i)
+				
+				reg_a := value_register_for_descriptor(.A, array_pointer_descriptor)
+				move_value(f, reg_a, temp)
+				
+				pointer: Operand =
+				{
+					type = .Memory_Indirect,
+					byte_size = item_byte_size,
+					indirect =
+					{
+						reg          = rax.reg,
+						displacement = 0,
+					},
+				}
+				push_instruction(f, {inc, {pointer, {}, {}}, nil})
+				push_instruction(f, {add, {temp.operand, imm32(i32(item_byte_size)), {}}, nil})
+				
+				push_instruction(f, {inc, {index.operand, {}, {}}, nil})
+				
+				Continue(&o)
+			}
+			End_Loop(o)
+		}
+		End_Function()
+		
+		value_as_function(increment, fn_pi32_to_void)(&array[0])
+		check(array[0] == 2)
+		check(array[1] == 3)
+		check(array[2] == 4)
+	})
+}
+
+Point :: struct
+{
+	x: i64,
+	y: i64,
+}
+
+test :: proc "c" () -> Point
+{
+	return Point{42, 84}
+}
+
+main :: proc()
+{
+	mass_spec()
+	function_spec()
+	
+	print_test_results()
+}
