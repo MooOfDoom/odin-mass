@@ -39,15 +39,6 @@ function_spec :: proc()
 	
 	fn_context: Function_Context
 	context.user_ptr = &fn_context
-	// a: [dynamic]int
-	
-	// append(&a, 1, 2, 3, 4, 5)
-	// fmt.println(len(a))
-	// x := dynamic_pop(&a)
-	// fmt.println(x)
-	// fmt.println(len(a))
-	// append(&a, 6, 7,8, 9)
-	// fmt.println(a)
 	
 	before_each(proc()
 	{

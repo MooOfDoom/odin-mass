@@ -7,5 +7,10 @@ if %errorlevel% neq 0 (
 	popd
 	exit /b 1
 )
+odin build ..\code\minimal -out=minimal.exe -opt:3 -no-crt -no-bounds-check -disable-assert
+if %errorlevel% neq 0 (
+	popd
+	exit /b 1
+)
 mass
 popd
