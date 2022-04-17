@@ -438,6 +438,32 @@ function_spec :: proc()
 		odin_function_value(`proc "c" (int)`, nil)
 	})
 	
+	it("should be able to call imported function", proc()
+	{
+		kernel32 := win32.load_library_a("Kernel32.dll")
+		check(kernel32 != nil)
+		GetStdHandle_from_dll := win32.get_proc_address(kernel32, "GetStdHandle")
+		check(GetStdHandle_from_dll != nil)
+		
+		buffer_append(&function_buffer, GetStdHandle_from_dll)
+		
+		GetStdHandle_value := odin_function_value(`GetStdHandle :: proc "std" (i32) -> rawptr`, nil)
+		GetStdHandle_value.operand =
+		{
+			type = .RIP_Relative,
+			byte_size = size_of(i64),
+			imm64 = i64(uintptr(&function_buffer.memory[0])),
+		}
+		
+		checker_value, f := Function()
+		{
+			Return(Call(GetStdHandle_value, value_from_i32(win32.STD_INPUT_HANDLE)))
+		}
+		End_Function()
+		
+		check(value_as_function(checker_value, fn_void_to_i64)() == i64(uintptr(win32.get_std_handle(win32.STD_INPUT_HANDLE))))
+	})
+	
 	it("should be able to call puts() say 'Hello, world!'", proc()
 	{
 		message: cstring = "Hello, world!"

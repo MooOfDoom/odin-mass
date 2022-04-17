@@ -2,7 +2,7 @@ package main
 
 import "core:sys/win32"
 
-DEBUG_PRINT :: true
+DEBUG_PRINT :: false
 
 fn_reflect :: proc(builder: ^Fn_Builder, descriptor: ^Descriptor) -> ^Value
 {
@@ -304,7 +304,7 @@ mass_spec :: proc()
 			{
 				type = .RIP_Relative,
 				byte_size = size_of(i32),
-				imm64 = i64(uintptr(rawptr(&function_buffer.memory[0]))),
+				imm64 = i64(uintptr(&function_buffer.memory[0])),
 			},
 		}
 		

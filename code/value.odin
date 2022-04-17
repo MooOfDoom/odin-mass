@@ -13,6 +13,7 @@ Operand_Type :: enum
 	Memory_Indirect,
 	RIP_Relative,
 	Label_32,
+	// External,
 }
 
 Operand_Memory_Indirect :: struct
@@ -347,8 +348,7 @@ imm64 :: proc
 
 imm_auto_i32 :: proc(value: i32) -> Operand
 {
-	unsigned_value := u32(value)
-	if unsigned_value <= 0x7f
+	if value >= i32(min(i8)) && value <= i32(max(i8))
 	{
 		return imm8(i8(value))
 	}
@@ -357,12 +357,11 @@ imm_auto_i32 :: proc(value: i32) -> Operand
 
 imm_auto_i64 :: proc(value: i64) -> Operand
 {
-	unsigned_value := u64(value)
-	if unsigned_value <= 0xff
+	if value >= i64(min(i8)) && value <= i64(max(i8))
 	{
 		return imm8(i8(value))
 	}
-	if unsigned_value <= 0xffffffff
+	if value >= i64(min(i32)) && value <= i64(max(i32))
 	{
 		return imm32(i32(value))
 	}
@@ -641,6 +640,10 @@ parse_odin_type :: proc(range: string) -> (^Descriptor, int)
 			{
 				inner_descriptor^ = &descriptor_i64
 			}
+			else if type == "rawptr"
+			{
+				inner_descriptor^ = &descriptor_i64
+			}
 			else if type == "cstring"
 			{
 				inner_descriptor^ = new(Descriptor)
@@ -694,11 +697,7 @@ odin_function_return_value :: proc(forward_declaration: string) -> ^Value
 		descriptor, _ := parse_odin_type(type)
 		return_byte_size := descriptor_byte_size(descriptor)
 		assert(return_byte_size <= 8, "Return values larger than 8 bytes unsupported")
-		result = new_clone(Value \
-		{
-			descriptor = descriptor,
-			operand = {type = .Register, byte_size = return_byte_size, reg = .A},
-		})
+		result = value_register_for_descriptor(.A, descriptor)
 	}
 	
 	return result
@@ -733,7 +732,7 @@ odin_function_value :: proc(forward_declaration: string, fn: fn_opaque) -> ^Valu
 			append(&result.descriptor.function.arguments, Value \
 			{
 				descriptor = arg_desc,
-				operand = rcx, // FIXME should not use a hardcoded register here
+				operand = {type = .Register, byte_size = descriptor_byte_size(arg_desc), reg = .C}, // FIXME should not use a hardcoded register here
 			})
 			arg_index += 1
 		}

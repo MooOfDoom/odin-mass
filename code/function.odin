@@ -3,7 +3,8 @@ package main
 import "core:mem"
 import "core:runtime"
 
-TO_BE_PATCHED :i32: -858993460 // 0xcccccccc
+TO_BE_PATCHED     :i32: -858993460 // 0xcccccccc
+TO_BE_PATCHED_i64 :i64: -3689348814741910324 // 0xcccccccccccccccc
 
 reserve_stack :: proc(builder: ^Fn_Builder, descriptor: ^Descriptor) -> ^Value
 {
