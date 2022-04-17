@@ -1,5 +1,7 @@
 package main
 
+import "core:fmt"
+import "core:mem"
 import "core:sys/win32"
 
 DEBUG_PRINT :: false
@@ -177,7 +179,8 @@ maybe_cast_to_tag :: proc(builder: ^Fn_Builder, name: string, value: ^Value) -> 
 				sum := plus(builder, result, value_from_i64(size_of(i64)))
 				move_value(builder, result, sum)
 			}
-			push_instruction(builder, {maybe_label = label})
+			end_if(builder, label)
+			
 			return result
 		}
 	}
@@ -224,13 +227,23 @@ mass_spec :: proc()
 	
 	before_each(proc()
 	{
-		function_buffer = make_buffer(128 * 1024, win32.PAGE_EXECUTE_READWRITE)
+		test_program =
+		{
+			function_buffer = make_buffer(128 * 1024, win32.PAGE_EXECUTE_READWRITE),
+			data_buffer     = make_buffer(1024 * 1024, win32.PAGE_READWRITE),
+		}
 		free_all()
+		
+		// NOTE(Lothar): Need to clear the fn_context so that its dynamic arrays don't continue to point
+		// into the freed temp buffer
+		fn_context := cast(^Function_Context)context.user_ptr
+		fn_context^ = {}
 	})
 	
 	after_each(proc()
 	{
-		free_buffer(&function_buffer)
+		free_buffer(&test_program.function_buffer)
+		free_buffer(&test_program.data_buffer)
 	})
 	
 	it("should have a way to create a function to check if a character is one of the provided set", proc()
@@ -296,7 +309,7 @@ mass_spec :: proc()
 	
 	it("should support RIP-relative addressing", proc()
 	{
-		buffer_append(&function_buffer, i32(42))
+		buffer_append(&test_program.function_buffer, i32(42))
 		rip: Value =
 		{
 			descriptor = &descriptor_i32,
@@ -304,7 +317,7 @@ mass_spec :: proc()
 			{
 				type = .RIP_Relative,
 				byte_size = size_of(i32),
-				imm64 = i64(uintptr(&function_buffer.memory[0])),
+				imm64 = i64(uintptr(&test_program.function_buffer.memory[0])),
 			},
 		}
 		

@@ -1,5 +1,6 @@
 package main
 
+import "core:fmt"
 import "core:mem"
 import "core:runtime"
 
@@ -84,15 +85,14 @@ move_value :: proc(builder: ^Fn_Builder, a: ^Value, b: ^Value)
 	}
 }
 
-fn_begin :: proc(buffer: ^Buffer) -> (result: ^Value, builder: Fn_Builder)
+fn_begin :: proc(program: ^Program) -> (result: ^Value, builder: Fn_Builder)
 {
 	builder =
 	{
-		buffer = buffer,
-		code_offset = buffer.occupied,
-		stack_displacements = make([dynamic]Stack_Patch, 0, 128, runtime.default_allocator()),
-		instructions        = make([dynamic]Instruction, 0, 4096, runtime.default_allocator()),
-		epilog_label        = make_label(),
+		buffer = &program.function_buffer,
+		code_offset = program.function_buffer.occupied,
+		instructions = make([dynamic]Instruction, 0, 32, runtime.default_allocator()),
+		epilog_label = make_label(),
 		result = new_clone(Value \
 		{
 			descriptor = new_clone(Descriptor \
@@ -103,7 +103,7 @@ fn_begin :: proc(buffer: ^Buffer) -> (result: ^Value, builder: Fn_Builder)
 					arguments = make([dynamic]Value, 0, 16),
 				},
 			}),
-			operand = label32(make_label(&buffer.memory[buffer.occupied])),
+			operand = label32(make_label(&program.function_buffer.memory[program.function_buffer.occupied])),
 		}),
 	}
 	result = builder.result
@@ -135,48 +135,25 @@ fn_end :: proc(builder: ^Fn_Builder)
 {
 	alignment :: 0x8
 	builder.stack_reserve += builder.max_call_parameters_stack_size
-	stack_size := align(builder.stack_reserve, 16) + alignment
+	builder.stack_reserve = align(builder.stack_reserve, 16) + alignment
 	
-	encode_instruction(builder, {sub, {rsp, imm_auto(stack_size), {}}, nil});
-	
-	// instruction_index_offsets := make([][^]byte, len(builder.instructions), runtime.default_allocator())
+	encode_instruction(builder, {sub, {rsp, imm_auto(builder.stack_reserve), {}}, nil});
 	
 	for instruction, i in &builder.instructions
 	{
-		// instruction_index_offsets[i] = &builder.buffer.memory[builder.buffer.occupied]
 		encode_instruction(builder, instruction)
-	}
-	
-	for patch in builder.stack_displacements
-	{
-		displacement := patch.location^
-		// @Volatile @StackPatch
-		if displacement < 0
-		{
-			// Negative displacement is used to push_instruction local variables
-			patch.location^ = stack_size + displacement
-		}
-		else if displacement >= builder.max_call_parameters_stack_size
-		{
-			// Positive values larger than max_call_parameters_stack_size
-			// Return address will be pushed on the stack by the caller and we need to account for that
-			return_address_size: i32 = size_of(rawptr)
-			patch.location^ = stack_size + displacement + return_address_size
-		}
 	}
 	
 	encode_instruction(builder, {maybe_label = builder.epilog_label})
 	
-	encode_instruction(builder, {add, {rsp, imm_auto(stack_size), {}}, nil})
+	encode_instruction(builder, {add, {rsp, imm_auto(builder.stack_reserve), {}}, nil})
 	encode_instruction(builder, {ret, {}, nil})
 	
 	if DEBUG_PRINT do print_buffer(builder.buffer.memory[builder.code_offset:builder.buffer.occupied])
 	
 	fn_freeze(builder)
 	
-	delete(builder.stack_displacements)
 	delete(builder.instructions)
-	// delete(instruction_index_offsets, runtime.default_allocator())
 }
 
 fn_arg :: proc(builder: ^Fn_Builder, descriptor: ^Descriptor) -> ^Value
@@ -686,7 +663,7 @@ Function :: proc() -> (^Value, ^Fn_Builder)
 {
 	builder := get_builder_from_context()
 	result: ^Value
-	result, builder^ = fn_begin(&function_buffer)
+	result, builder^ = fn_begin(&test_program)
 	return result, builder
 }
 

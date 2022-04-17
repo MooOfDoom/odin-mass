@@ -62,7 +62,7 @@ buffer_allocator_proc :: proc(allocator_data: rawptr, mode: mem.Allocator_Mode,
 			
 			#no_bounds_check end := &buffer.memory[buffer.occupied]
 			aligned_end := mem.align_forward(end, uintptr(alignment))
-			extra := uintptr(aligned_end) - uintptr(rawptr(end))
+			extra := uintptr(aligned_end) - uintptr(end)
 			total_size := size + int(extra)
 			
 			if buffer.occupied + total_size > len(buffer.memory)

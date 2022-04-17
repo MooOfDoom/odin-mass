@@ -13,7 +13,6 @@ Operand_Type :: enum
 	Memory_Indirect,
 	RIP_Relative,
 	Label_32,
-	// External,
 }
 
 Operand_Memory_Indirect :: struct
@@ -212,10 +211,10 @@ print_operand :: proc(operand: ^Operand)
 	}
 }
 
-Stack_Patch :: struct
+Program :: struct
 {
-	location:  ^i32,
-	byte_size: i32,
+	function_buffer: Buffer,
+	data_buffer:     Buffer,
 }
 
 Fn_Builder :: struct
@@ -228,8 +227,7 @@ Fn_Builder :: struct
 	
 	epilog_label: ^Label,
 	
-	instructions:        [dynamic]Instruction,
-	stack_displacements: [dynamic]Stack_Patch,
+	instructions: [dynamic]Instruction,
 	
 	result: ^Value,
 }
@@ -311,7 +309,7 @@ make_label :: proc(target: rawptr = nil) -> ^Label
 	return new_clone(Label \
 	{
 		target    = target,
-		locations = make([dynamic]Label_Location, 0, 32),
+		locations = make([dynamic]Label_Location, 0, 16),
 	})
 }
 
@@ -552,6 +550,7 @@ descriptor_byte_size :: proc(descriptor: ^Descriptor) -> i32
 		}
 		case:
 		{
+			fmt.println(descriptor)
 			assert(false, "Unknown Descriptor Type")
 		}
 	}

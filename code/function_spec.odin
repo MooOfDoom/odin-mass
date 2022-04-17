@@ -4,7 +4,7 @@ import "core:fmt"
 import "core:runtime"
 import "core:sys/win32"
 
-function_buffer: Buffer
+test_program: Program
 
 make_identity :: proc(type: ^Descriptor) -> ^Value
 {
@@ -42,13 +42,23 @@ function_spec :: proc()
 	
 	before_each(proc()
 	{
-		function_buffer = make_buffer(128 * 1024, win32.PAGE_EXECUTE_READWRITE)
+		test_program =
+		{
+			function_buffer = make_buffer(128 * 1024, win32.PAGE_EXECUTE_READWRITE),
+			data_buffer     = make_buffer(1024 * 1024, win32.PAGE_READWRITE),
+		}
 		free_all()
+		
+		// NOTE(Lothar): Need to clear the fn_context so that its dynamic arrays don't continue to point
+		// into the freed temp buffer
+		fn_context := cast(^Function_Context)context.user_ptr
+		fn_context^ = {}
 	})
 	
 	after_each(proc()
 	{
-		free_buffer(&function_buffer)
+		free_buffer(&test_program.function_buffer)
+		free_buffer(&test_program.data_buffer)
 	})
 	
 	it("should support short-circuiting &&", proc()
@@ -156,8 +166,8 @@ function_spec :: proc()
 		}
 		End_Function()
 		
-		previous: u32
-		win32.virtual_protect(&function_buffer.memory[0], len(function_buffer.memory), win32.PAGE_EXECUTE, &previous)
+		// previous: u32
+		// win32.virtual_protect(&test_program.function_buffer.memory[0], len(test_program.function_buffer.memory), win32.PAGE_EXECUTE, &previous)
 		
 		check(value_as_function(sizeof_i64, fn_i64_to_i64)(42) == 8)
 		check(value_as_function(sizeof_i32, fn_i32_to_i64)(42) == 4)
@@ -445,14 +455,14 @@ function_spec :: proc()
 		GetStdHandle_from_dll := win32.get_proc_address(kernel32, "GetStdHandle")
 		check(GetStdHandle_from_dll != nil)
 		
-		buffer_append(&function_buffer, GetStdHandle_from_dll)
+		buffer_append(&test_program.function_buffer, GetStdHandle_from_dll)
 		
 		GetStdHandle_value := odin_function_value(`GetStdHandle :: proc "std" (i32) -> rawptr`, nil)
 		GetStdHandle_value.operand =
 		{
 			type = .RIP_Relative,
 			byte_size = size_of(i64),
-			imm64 = i64(uintptr(&function_buffer.memory[0])),
+			imm64 = i64(uintptr(&test_program.function_buffer.memory[0])),
 		}
 		
 		checker_value, f := Function()

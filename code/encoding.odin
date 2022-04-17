@@ -220,9 +220,6 @@ encode_instruction :: proc(builder: ^Fn_Builder, instruction: Instruction)
 			buffer_append(buffer, sib_byte)
 		}
 		
-		offset_of_displacement: int
-		stack_byte_size: i32
-		
 		// Write out displacement
 		if needs_mod_r_m && mod != MOD_Register
 		{
@@ -244,18 +241,31 @@ encode_instruction :: proc(builder: ^Fn_Builder, instruction: Instruction)
 				}
 				else if operand.type == .Memory_Indirect
 				{
+					displacement := operand.indirect.displacement
+					
 					if encoding_stack_operand
 					{
-						offset_of_displacement = buffer.occupied
-						stack_byte_size = operand.byte_size
+						if displacement < 0
+						{
+							// Negative displacement is used to encode local variables
+							displacement += builder.stack_reserve
+						}
+						else if displacement >= builder.max_call_parameters_stack_size
+						{
+							// Positive values larger than max_call_parameters_stack_size
+							// Return address will be pushed on the stack by the caller
+							// and we need to account for that
+							return_address_size: i32 = size_of(rawptr)
+							displacement += builder.stack_reserve + return_address_size
+						}
 					}
 					if mod == MOD_Displacement_i32
 					{
-						buffer_append(buffer, operand.indirect.displacement)
+						buffer_append(buffer, displacement)
 					}
 					else if mod == MOD_Displacement_i8
 					{
-						buffer_append(buffer, i8(operand.indirect.displacement))
+						buffer_append(buffer, i8(displacement))
 					}
 					else
 					{
@@ -283,7 +293,11 @@ encode_instruction :: proc(builder: ^Fn_Builder, instruction: Instruction)
 				{
 					patch_target := cast(^i32)&buffer.memory[buffer.occupied]
 					buffer_append(buffer, i32(TO_BE_PATCHED))
-					append(&operand.label32.locations, Label_Location{patch_target, &buffer.memory[buffer.occupied]})
+					append(&operand.label32.locations, Label_Location \
+					{
+						patch_target =patch_target,
+						from_offset = &buffer.memory[buffer.occupied],
+					})
 				}
 			}
 			else if operand.type == .Immediate_32
@@ -294,16 +308,6 @@ encode_instruction :: proc(builder: ^Fn_Builder, instruction: Instruction)
 			{
 				buffer_append(buffer, operand.imm64)
 			}
-		}
-		
-		if offset_of_displacement != 0
-		{
-			location := cast(^i32)(&builder.buffer.memory[offset_of_displacement])
-			append(&builder.stack_displacements, Stack_Patch \
-			{
-				location = location,
-				byte_size = stack_byte_size,
-			})
 		}
 		return
 	}
