@@ -25,11 +25,26 @@ push_instruction :: proc(builder: ^Fn_Builder, instruction: Instruction)
 	append(&builder.instructions, instruction)
 }
 
+is_memory_operand :: proc(operand: ^Operand) -> bool
+{
+	return (operand.type == .Memory_Indirect ||
+	        operand.type == .RIP_Relative)
+}
+
 move_value :: proc(builder: ^Fn_Builder, a: ^Value, b: ^Value)
 {
 	// TODO figure out more type checking
 	a_size := descriptor_byte_size(a.descriptor)
 	b_size := descriptor_byte_size(b.descriptor)
+	
+	if is_memory_operand(&a.operand) && is_memory_operand(&b.operand)
+	{
+		reg_a := value_register_for_descriptor(.A, a.descriptor)
+		// TODO Can be a problem if RAX is already used as temp
+		move_value(builder, reg_a, b)
+		move_value(builder, a, reg_a)
+		return
+	}
 	
 	// if a_size != b_size
 	// {
@@ -497,7 +512,7 @@ call_function_overload :: proc(builder: ^Fn_Builder, to_call: ^Value, args: ..^V
 
 call_function_value :: proc(builder: ^Fn_Builder, to_call: ^Value, args: ..^Value) -> ^Value
 {
-	assert(to_call.descriptor.type == .Function)
+	assert(to_call.descriptor.type == .Function, "Value to call must be a function")
 	overload_loop: for overload := to_call; overload != nil; overload = overload.descriptor.function.next_overload
 	{
 		for arg, i in args

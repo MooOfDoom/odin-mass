@@ -198,7 +198,7 @@ print_operand :: proc(operand: ^Operand)
 		}
 		case .RIP_Relative:
 		{
-			fmt.printf("[rip + xxx]")
+			fmt.printf("rip_to(0x%016x)", operand.imm64)
 		}
 		case .Label_32:
 		{
@@ -418,6 +418,26 @@ value_register_for_descriptor :: proc(reg: Register, descriptor: ^Descriptor) ->
 			reg       = reg,
 		},
 	})
+}
+
+value_global :: proc(program: ^Program, descriptor: ^Descriptor) -> ^Value
+{
+	byte_size := descriptor_byte_size(descriptor)
+	
+	address := &program.data_buffer.memory[program.data_buffer.occupied]
+	program.data_buffer.occupied += int(byte_size)
+	
+	result := new_clone(Value \
+	{
+		descriptor = descriptor,
+		operand =
+		{
+			type = .RIP_Relative,
+			byte_size = byte_size,
+			imm64 = i64(uintptr(address)),
+		},
+	})
+	return result
 }
 
 descriptor_pointer_to :: proc(descriptor: ^Descriptor) -> ^Descriptor

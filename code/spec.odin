@@ -309,21 +309,35 @@ mass_spec :: proc()
 	
 	it("should support RIP-relative addressing", proc()
 	{
-		buffer_append(&test_program.function_buffer, i32(42))
-		rip: Value =
+		// buffer_append(&test_program.function_buffer, i32(42))
+		// rip: Value =
+		// {
+		// 	descriptor = &descriptor_i32,
+		// 	operand =
+		// 	{
+		// 		type = .RIP_Relative,
+		// 		byte_size = size_of(i32),
+		// 		imm64 = i64(uintptr(&test_program.function_buffer.memory[0])),
+		// 	},
+		// }
+		global_a := value_global(&test_program, &descriptor_i32)
 		{
-			descriptor = &descriptor_i32,
-			operand =
-			{
-				type = .RIP_Relative,
-				byte_size = size_of(i32),
-				imm64 = i64(uintptr(&test_program.function_buffer.memory[0])),
-			},
+			check(global_a.operand.type == .RIP_Relative)
+			
+			address := cast(^i32)uintptr(global_a.operand.imm64)
+			address^ = 32
+		}
+		global_b := value_global(&test_program, &descriptor_i32)
+		{
+			check(global_b.operand.type == .RIP_Relative)
+			
+			address := cast(^i32)uintptr(global_b.operand.imm64)
+			address^ = 10
 		}
 		
 		return_42, f := Function()
 		{
-			Return(&rip)
+			Return(Plus(global_a, global_b))
 		}
 		End_Function()
 		

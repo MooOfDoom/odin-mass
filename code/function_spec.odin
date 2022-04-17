@@ -455,19 +455,18 @@ function_spec :: proc()
 		GetStdHandle_from_dll := win32.get_proc_address(kernel32, "GetStdHandle")
 		check(GetStdHandle_from_dll != nil)
 		
-		buffer_append(&test_program.function_buffer, GetStdHandle_from_dll)
+		GetStdHandle_value := odin_function_value(`GetStdHandle :: proc "std" (i32) -> rawptr`, cast(fn_opaque)GetStdHandle_from_dll)
 		
-		GetStdHandle_value := odin_function_value(`GetStdHandle :: proc "std" (i32) -> rawptr`, nil)
-		GetStdHandle_value.operand =
+		global := value_global(&test_program, GetStdHandle_value.descriptor)
 		{
-			type = .RIP_Relative,
-			byte_size = size_of(i64),
-			imm64 = i64(uintptr(&test_program.function_buffer.memory[0])),
+			check(global.operand.type == .RIP_Relative)
+			address := cast(^fn_opaque)uintptr(global.operand.imm64)
+			address^ = cast(fn_opaque)GetStdHandle_from_dll
 		}
 		
 		checker_value, f := Function()
 		{
-			Return(Call(GetStdHandle_value, value_from_i32(win32.STD_INPUT_HANDLE)))
+			Return(Call(global, value_from_i32(win32.STD_INPUT_HANDLE)))
 		}
 		End_Function()
 		

@@ -229,13 +229,11 @@ encode_instruction :: proc(builder: ^Fn_Builder, instruction: Instruction)
 				if operand.type == .RIP_Relative
 				{
 					start_address := i64(uintptr(&buffer.memory[0]))
-					end_address := start_address + i64(len(buffer.memory))
-					assert(operand.imm64 >= start_address && operand.imm64 < end_address)
 					next_instruction_address := start_address + i64(buffer.occupied) + size_of(i32)
 					
-					displacement_i64 := operand.imm64 - next_instruction_address
-					assert(displacement_i64 >= i64(min(i32)) && displacement_i64 < i64(max(i32)))
-					displacement := i32(displacement_i64)
+					diff := operand.imm64 - next_instruction_address
+					assert(diff >= i64(min(i32)) && diff <= i64(max(i32)), "RIP relative address too distant")
+					displacement := i32(diff)
 					
 					buffer_append(buffer, displacement)
 				}
