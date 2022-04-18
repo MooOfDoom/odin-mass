@@ -282,6 +282,38 @@ IMAGE_SCN_MEM_WRITE              :: 0x80000000  // Section is writeable.
 //
 IMAGE_SCN_SCALE_INDEX            :: 0x00000001  // Tls index is scaled
 
+IMAGE_IMPORT_BY_NAME :: struct
+{
+	Hint: u16,
+	Name: [1]byte,
+}
+
+IMAGE_THUNK_DATA64 :: struct
+{
+	u1: struct #raw_union
+	{
+		ForwarderString: u64, // PBYTE
+		Function:        u64, // PDWORD
+		Ordinal:         u64,
+		AddressOfData:   u64, // PIMAGE_IMPORT_BY_NAME
+	},
+}
+
+IMAGE_IMPORT_DESCRIPTOR :: struct
+{
+	OriginalFirstThunk: u32, // 0 for terminating null import descriptor
+	                         // RVA to original unbound IAT (PIMAGE_THUNK_DATA)
+	
+	TimeDateStamp:      u32, // 0 if not bound,
+	                         // -1 if bound, and real date\time stamp
+	                         //     in IMAGE_DIRECTORY_ENTRY_BOUND_IMPORT (new BIND)
+	                         // O.W. date/time stamp of DLL bound to (Old BIND)
+	
+	ForwarderChain:     u32, // -1 if no forwarders
+	Name:               u32,
+	FirstThunk:         u32, // RVA to IAT (if bound this IAT has actual addresses)
+}
+
 DOS_PROGRAM_BYTES := [?]byte \
 {
 	0x0E, 0x1F, 0xBA, 0x0E, 0x00, 0xB4, 0x09, 0xCD, 0x21, 0xB8, 0x01, 0x4C, 0xCD, 0x21, 0x54, 0x68,
@@ -371,7 +403,7 @@ write_executable :: proc()
 			
 			{}, // Security
 			{}, // Relocation
-			{VirtualAddress = 0x2010, Size = 0x1c}, // Debug      FIXME will take a while to implement
+			{}, // {VirtualAddress = 0x2010, Size = 0x1c}, // Debug      FIXME will take a while to implement
 			{}, // Architecture
 			
 			{}, // Global PTR
@@ -428,7 +460,78 @@ write_executable :: proc()
 	section_offset += pdata_section_header.SizeOfRawData
 	
 	// NULL header telling that the list is done
-	buffer_append(&exe_buffer, IMAGE_SECTION_HEADER{})
+	_ = buffer_allocate(&exe_buffer, IMAGE_SECTION_HEADER)
+	
+	// .text segment
+	assert(exe_buffer.occupied < int(text_section_header.PointerToRawData))
+	exe_buffer.occupied = int(text_section_header.PointerToRawData)
+	
+	buffer_append(&exe_buffer, [?]byte \
+	{
+		0x48, 0x83, 0xec, 0x28,             // sub rsp 0x28
+		0xb9, 0x2a, 0x00, 0x00, 0x00,       // mov ecx 0x2a
+		0xff, 0x15, 0xf1, 0x0f, 0x00, 0x00, // call ExitProcess
+		0xcc,                               // int 3
+	})
+	
+	// .rdata segment
+	assert(exe_buffer.occupied < int(rdata_section_header.PointerToRawData))
+	exe_buffer.occupied = int(rdata_section_header.PointerToRawData)
+	
+	iat_rva: i32 = 0x2130 // FIXME calculate this
+	buffer_append(&exe_buffer, iat_rva)
+	
+	exe_buffer.occupied = int(rdata_section_header.PointerToRawData) + 0x10 // FIXME do not hardcode this
+	
+	// debug bytes
+	// buffer_append(&exe_buffer, [?]byte \
+	// {
+	// 	0x00, 0x00, 0x00, 0x00, 0x56, 0x8e, 0xf4, 0x5e, 0x00, 0x00, 0x00, 0x00, 0x0d, 0x00, 0x00, 0x00,
+	// 	0xc4, 0x00, 0x00, 0x00, 0x2c, 0x20, 0x00, 0x00, 0x2c, 0x06, 0x00, 0x00,
+	// })
+	
+	// .idata?
+	import_data_directory_file_offset := int(rdata_section_header.PointerToRawData) + 0xf8
+	
+	exe_buffer.occupied = import_data_directory_file_offset
+	
+	image_import_descriptor := buffer_allocate(&exe_buffer, IMAGE_IMPORT_DESCRIPTOR)
+	image_import_descriptor^ =
+	{
+		OriginalFirstThunk = 0x2120,
+		Name               = 0x213e,
+		FirstThunk         = 0x2000,
+	}
+	
+	_ = buffer_allocate(&exe_buffer, IMAGE_IMPORT_DESCRIPTOR) // Null terminator
+	
+	buffer_append(&exe_buffer, IMAGE_THUNK_DATA64{{AddressOfData = 0x2130}})
+	
+	
+	{
+		exe_buffer.occupied = int(rdata_section_header.PointerToRawData) + 0x130
+		buffer_append(&exe_buffer, u16(0x0164)) // TODO set to zero
+		function_name := "ExitProcess"
+		
+		aligned_function_name_size := align(i32(len(function_name)), 2)
+		copy(buffer_allocate_size(&exe_buffer, int(aligned_function_name_size)), function_name)
+	}
+	
+	{
+		exe_buffer.occupied = int(rdata_section_header.PointerToRawData) + 0x13e
+		library_name := "KERNEL32.dll"
+		
+		aligned_name_size := align(i32(len(library_name)), 2)
+		copy(buffer_allocate_size(&exe_buffer, int(aligned_name_size)), library_name)
+	}
+	
+	// .pdata segment
+	assert(exe_buffer.occupied < int(pdata_section_header.PointerToRawData))
+	exe_buffer.occupied = int(pdata_section_header.PointerToRawData)
+	
+	buffer_append(&exe_buffer, [?]byte{0x00, 0x10, 0x00, 0x00, 0x10, 0x00, 0x00, 0xf0, 0x20})
+	
+	exe_buffer.occupied = int(pdata_section_header.PointerToRawData + pdata_section_header.SizeOfRawData)
 	
 	////////
 	

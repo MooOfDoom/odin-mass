@@ -191,9 +191,18 @@ free_buffer :: proc(buffer: ^Buffer)
 
 buffer_allocate :: proc(buffer: ^Buffer, $T: typeid) -> ^T
 {
+	assert(buffer.occupied + size_of(T) <= len(buffer.memory))
 	result := &buffer.memory[buffer.occupied]
 	buffer.occupied += size_of(T)
 	return cast(^T)result
+}
+
+buffer_allocate_size :: proc(buffer: ^Buffer, size: int) -> []byte
+{
+	assert(buffer.occupied + size <= len(buffer.memory))
+	result := mem.byte_slice(&buffer.memory[buffer.occupied], size)
+	buffer.occupied += size
+	return result
 }
 
 buffer_append :: proc(buffer: ^Buffer, value: $T)
