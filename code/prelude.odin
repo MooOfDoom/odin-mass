@@ -189,6 +189,13 @@ free_buffer :: proc(buffer: ^Buffer)
 	buffer.occupied = 0
 }
 
+buffer_allocate :: proc(buffer: ^Buffer, $T: typeid) -> ^T
+{
+	result := &buffer.memory[buffer.occupied]
+	buffer.occupied += size_of(T)
+	return cast(^T)result
+}
+
 buffer_append :: proc(buffer: ^Buffer, value: $T)
 {
 	first_non_occupied_address := &buffer.memory[buffer.occupied]

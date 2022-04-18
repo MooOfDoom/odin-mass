@@ -61,6 +61,11 @@ function_spec :: proc()
 		free_buffer(&test_program.data_buffer)
 	})
 	
+	it("should write out an executable", proc()
+	{
+		write_executable()
+	})
+	
 	it("should support short-circuiting &&", proc()
 	{
 		checker_value, f := Function()

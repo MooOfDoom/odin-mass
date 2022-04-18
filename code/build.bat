@@ -12,5 +12,8 @@ if %errorlevel% neq 0 (
 	popd
 	exit /b 1
 )
-mass
+popd
+
+pushd C:\development\odin-mass
+build\mass
 popd
