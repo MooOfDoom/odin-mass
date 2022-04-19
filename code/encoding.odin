@@ -68,11 +68,19 @@ encode_instruction :: proc(builder: ^Fn_Builder, instruction: Instruction)
 			{
 				continue
 			}
+			if operand.type == .RIP_Relative_Import && operand_encoding.type == .Register_Memory
+			{
+				continue
+			}
 			if operand.type == .Memory_Indirect && operand_encoding.type == .Register_Memory
 			{
 				continue
 			}
 			if operand.type == .RIP_Relative && operand_encoding.type == .Memory
+			{
+				continue
+			}
+			if operand.type == .RIP_Relative_Import && operand_encoding.type == .Memory
 			{
 				continue
 			}
@@ -151,7 +159,7 @@ encode_instruction :: proc(builder: ^Fn_Builder, instruction: Instruction)
 			    operand_encoding.type == .Memory)
 			{
 				needs_mod_r_m = true
-				if operand.type == .RIP_Relative
+				if operand.type == .RIP_Relative || operand.type == .RIP_Relative_Import
 				{
 					mod = 0b00
 					r_m = 0b101
@@ -226,7 +234,36 @@ encode_instruction :: proc(builder: ^Fn_Builder, instruction: Instruction)
 			for operand_index in 0 ..< len(instruction.operands)
 			{
 				operand := &instruction.operands[operand_index]
-				if operand.type == .RIP_Relative
+				if operand.type == .RIP_Relative_Import
+				{
+					program := builder.program
+					code_base_rva         := program.code_base_rva
+					code_base_file_offset := program.code_base_file_offset
+					next_instruction_address :=
+						i64(code_base_rva) + i64(buffer.occupied - code_base_file_offset) + size_of(i32)
+					
+					lib_loop: for lib in &program.import_libraries
+					{
+						if lib.dll.name != operand.import_.library_name do continue
+						
+						for function in &lib.functions
+						{
+							if function.name == operand.import_.symbol_name
+							{
+								diff := i64(function.iat_rva) - next_instruction_address
+								assert(diff >= i64(min(i32)) && diff <= i64(max(i32)), "RIP relative import address too distant")
+								displacement := i32(diff)
+								
+								buffer_append(buffer, displacement)
+								
+								break lib_loop
+							}
+						}
+						assert(false, fmt.tprintf("Import %v:%v not found in program import libraries",
+						                          operand.import_.library_name, operand.import_.symbol_name))
+					}
+				}
+				else if operand.type == .RIP_Relative
 				{
 					start_address := i64(uintptr(&buffer.memory[0]))
 					next_instruction_address := start_address + i64(buffer.occupied) + size_of(i32)
@@ -309,6 +346,7 @@ encode_instruction :: proc(builder: ^Fn_Builder, instruction: Instruction)
 		}
 		return
 	}
+	fmt.printf("at %v:%v\n", instruction.loc.file_path, instruction.loc.line)
 	fmt.printf("%v", instruction.mnemonic.name)
 	for operand in &instruction.operands
 	{

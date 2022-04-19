@@ -1,5 +1,7 @@
 package main
 
+import "core:runtime"
+
 Instruction_Extension_Type :: enum
 {
 	None,
@@ -51,6 +53,7 @@ Instruction :: struct
 	mnemonic:    X64_Mnemonic,
 	operands:    [3]Operand,
 	maybe_label: ^Label,
+	loc:         runtime.Source_Code_Location,
 }
 
 @(private="file")

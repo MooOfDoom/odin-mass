@@ -63,7 +63,51 @@ function_spec :: proc()
 	
 	it("should write out an executable", proc()
 	{
-		write_executable()
+		program: Program =
+		{
+			function_buffer  = make_buffer(128 * 1024, win32.PAGE_EXECUTE_READWRITE),
+			data_buffer      = make_buffer(1024 * 1024, win32.PAGE_READWRITE),
+			import_libraries =
+			{
+				{
+					dll       = {name = "kernel32.dll"},
+					functions =
+					{
+						{name = "ExitProcess"},
+						// {name = "GetStdHandle"},
+						// {name = "ReadConsoleA"},
+					},
+				},
+				// {
+				// 	dll       = {name = "user32.dll"},
+				// 	functions =
+				// 	{
+				// 		{name = "ShowWindow"},
+				// 	},
+				// },
+			},
+		}
+		
+		ExitProcess_value := odin_function_value(`ExitProcess :: proc "std" (i32)`, nil)
+		ExitProcess_value.operand =
+		{
+			type = .RIP_Relative_Import,
+			byte_size = descriptor_byte_size(ExitProcess_value.descriptor),
+			import_ =
+			{
+				symbol_name  = "ExitProcess",
+				library_name = "kernel32.dll",
+			},
+		}
+		
+		checker_value, f := Function(&program)
+		{
+			Return(Call(ExitProcess_value, value_from_i32(42)))
+		}
+		
+		program.entry_point = f
+		
+		write_executable(&program)
 	})
 	
 	it("should support short-circuiting &&", proc()

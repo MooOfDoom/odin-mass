@@ -3,21 +3,6 @@ package main
 import "core:fmt"
 import "core:sys/win32"
 
-Import_Name_To_Rva :: struct
-{
-	name:     string,
-	name_rva: u32,
-	ptr_rva:  u32,
-}
-
-Import_Library :: struct
-{
-	dll:             Import_Name_To_Rva,
-	iat_rva:         u32,
-	image_thunk_rva: u32,
-	functions:       []Import_Name_To_Rva,
-}
-
 @(private="file")
 short_name :: proc(name: string) -> [IMAGE_SIZEOF_SHORT_NAME]byte
 {
@@ -26,7 +11,7 @@ short_name :: proc(name: string) -> [IMAGE_SIZEOF_SHORT_NAME]byte
 	return result
 }
 
-write_executable :: proc()
+write_executable :: proc(program: ^Program)
 {
 	exe_buffer := make_buffer(1024 * 1024, win32.PAGE_READWRITE)
 	
@@ -147,40 +132,10 @@ write_executable :: proc()
 	
 	// .rdata segment
 	
-	kernel32_functions := [?]Import_Name_To_Rva \
-	{
-		// @MachineCodePatch
-		{name = "ExitProcess",  name_rva = 0xcccccccc, ptr_rva = 0xcccccccc},
-		
-		{name = "GetStdHandle", name_rva = 0xcccccccc, ptr_rva = 0xcccccccc},
-		{name = "ReadConsoleA", name_rva = 0xcccccccc, ptr_rva = 0xcccccccc},
-	}
-	
-	user32_functions := [?]Import_Name_To_Rva \
-	{
-		{name = "ShowWindow", name_rva = 0xcccccccc, ptr_rva = 0xcccccccc},
-	}
-	
-	import_libraries := [?]Import_Library \
-	{
-		{
-			dll             = {name = "kernel32.dll", name_rva = 0xcccccccc},
-			iat_rva         = 0xcccccccc,
-			image_thunk_rva = 0xcccccccc,
-			functions       = kernel32_functions[:],
-		},
-		{
-			dll             = {name = "user32.dll", name_rva = 0xcccccccc},
-			iat_rva         = 0xcccccccc,
-			image_thunk_rva = 0xcccccccc,
-			functions       = user32_functions[:],
-		},
-	}
-	
 	exe_buffer.occupied = int(rdata_section_header.PointerToRawData)
 	
 	// Function Names
-	for lib in &import_libraries
+	for lib in &program.import_libraries
 	{
 		for function in &lib.functions
 		{
@@ -193,12 +148,12 @@ write_executable :: proc()
 	}
 	
 	// IAT
-	for lib in &import_libraries
+	for lib in &program.import_libraries
 	{
-		lib.iat_rva = file_offset_to_rva(&exe_buffer, rdata_section_header)
+		lib.dll.iat_rva = file_offset_to_rva(&exe_buffer, rdata_section_header)
 		for function in &lib.functions
 		{
-			function.ptr_rva = file_offset_to_rva(&exe_buffer, rdata_section_header)
+			function.iat_rva = file_offset_to_rva(&exe_buffer, rdata_section_header)
 			buffer_append(&exe_buffer, u64(function.name_rva))
 		}
 		// End of IAT list
@@ -207,12 +162,12 @@ write_executable :: proc()
 	
 	optional_header.DataDirectory[IAT_DIRECTORY_INDEX] =
 	{
-		VirtualAddress = import_libraries[0].iat_rva,
-		Size           = file_offset_to_rva(&exe_buffer, rdata_section_header) - import_libraries[0].iat_rva,
+		VirtualAddress = program.import_libraries[0].dll.iat_rva,
+		Size           = file_offset_to_rva(&exe_buffer, rdata_section_header) - program.import_libraries[0].dll.iat_rva,
 	}
 	
 	// Image thunks
-	for lib in &import_libraries
+	for lib in &program.import_libraries
 	{
 		lib.image_thunk_rva = file_offset_to_rva(&exe_buffer, rdata_section_header)
 		for function in &lib.functions
@@ -224,7 +179,7 @@ write_executable :: proc()
 	}
 	
 	// Library Names
-	for lib in &import_libraries
+	for lib in &program.import_libraries
 	{
 		lib.dll.name_rva = file_offset_to_rva(&exe_buffer, rdata_section_header)
 		{
@@ -235,14 +190,14 @@ write_executable :: proc()
 	
 	// Import Directory
 	import_directory_rva := file_offset_to_rva(&exe_buffer, rdata_section_header)
-	for lib in &import_libraries
+	for lib in &program.import_libraries
 	{
 		image_import_descriptor := buffer_allocate(&exe_buffer, IMAGE_IMPORT_DESCRIPTOR)
 		image_import_descriptor^ =
 		{
 			OriginalFirstThunk = lib.image_thunk_rva,
 			Name               = lib.dll.name_rva,
-			FirstThunk         = lib.iat_rva,
+			FirstThunk         = lib.dll.iat_rva,
 		}
 	}
 	
@@ -258,34 +213,40 @@ write_executable :: proc()
 	// .text segment
 	exe_buffer.occupied = int(text_section_header.PointerToRawData)
 	
-	buffer_append(&exe_buffer, [?]byte \
-	{
-		0x48, 0x83, 0xec, 0x28,         // sub rsp, 0x28
-		0xb9, 0x2a, 0x00, 0x00, 0x00,   // mov ecx, 0x2a
-	})
+	program.code_base_file_offset = exe_buffer.occupied
+	program.code_base_rva = text_section_header.VirtualAddress
+	program.entry_point.buffer = &exe_buffer
+	program.entry_point.code_offset = exe_buffer.occupied
+	fn_end(program.entry_point)
 	
-	buffer_append_u8(&exe_buffer, 0xff) // call
-	buffer_append_u8(&exe_buffer, 0x15)
-	{
-		ExitProcess_rip_relative_address := buffer_allocate(&exe_buffer, i32)
-		ExitProcess_call_rva             := file_offset_to_rva(&exe_buffer, text_section_header)
+	// buffer_append(&exe_buffer, [?]byte \
+	// {
+	// 	0x48, 0x83, 0xec, 0x28,         // sub rsp, 0x28
+	// 	0xb9, 0x2a, 0x00, 0x00, 0x00,   // mov ecx, 0x2a
+	// })
+	
+	// buffer_append_u8(&exe_buffer, 0xff) // call
+	// buffer_append_u8(&exe_buffer, 0x15)
+	// {
+	// 	ExitProcess_rip_relative_address := buffer_allocate(&exe_buffer, i32)
+	// 	ExitProcess_call_rva             := file_offset_to_rva(&exe_buffer, text_section_header)
 		
-		lib_loop: for lib in &import_libraries
-		{
-			if lib.dll.name != "kernel32.dll" do continue
+	// 	lib_loop: for lib in &program.import_libraries
+	// 	{
+	// 		if lib.dll.name != "kernel32.dll" do continue
 			
-			for function, i in &lib.functions
-			{
-				if function.name == "ExitProcess"
-				{
-					ExitProcess_rip_relative_address^ = i32(function.ptr_rva - ExitProcess_call_rva)
-					break lib_loop
-				}
-			}
-			assert(false, "ExitProcess was not in the kernel32.dll imports")
-		}
-	}
-	buffer_append_u8(&exe_buffer, 0xcc) // int 3
+	// 		for function in &lib.functions
+	// 		{
+	// 			if function.name == "ExitProcess"
+	// 			{
+	// 				ExitProcess_rip_relative_address^ = i32(function.iat_rva - ExitProcess_call_rva)
+	// 				break lib_loop
+	// 			}
+	// 		}
+	// 		assert(false, "ExitProcess was not in the kernel32.dll imports")
+	// 	}
+	// }
+	// buffer_append_u8(&exe_buffer, 0xcc) // int 3
 	
 	exe_buffer.occupied = int(text_section_header.PointerToRawData + text_section_header.SizeOfRawData)
 	

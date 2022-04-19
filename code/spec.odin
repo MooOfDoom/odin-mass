@@ -556,10 +556,10 @@ mass_spec :: proc()
 						displacement = 0,
 					},
 				}
-				push_instruction(f, {inc, {pointer, {}, {}}, nil})
-				push_instruction(f, {add, {temp.operand, imm32(i32(item_byte_size)), {}}, nil})
+				push_instruction(f, {inc, {pointer, {}, {}}, nil, #location()})
+				push_instruction(f, {add, {temp.operand, imm32(i32(item_byte_size)), {}}, nil, #location()})
 				
-				push_instruction(f, {inc, {index.operand, {}, {}}, nil})
+				push_instruction(f, {inc, {index.operand, {}, {}}, nil, #location()})
 				
 				Continue()
 			}

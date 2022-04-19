@@ -12,6 +12,7 @@ Operand_Type :: enum
 	Immediate_64,
 	Memory_Indirect,
 	RIP_Relative,
+	RIP_Relative_Import,
 	Label_32,
 }
 
@@ -33,6 +34,26 @@ Label :: struct
 	locations: [dynamic]Label_Location,
 }
 
+Import_Name_To_Rva :: struct
+{
+	name:     string,
+	name_rva: u32,
+	iat_rva:  u32,
+}
+
+Import_Library :: struct
+{
+	dll:             Import_Name_To_Rva,
+	functions:       [dynamic]Import_Name_To_Rva,
+	image_thunk_rva: u32,
+}
+
+Operand_RIP_Relative_Import :: struct
+{
+	library_name: string,
+	symbol_name:  string,
+}
+
 Operand :: struct
 {
 	type:      Operand_Type,
@@ -44,6 +65,7 @@ Operand :: struct
 		imm64:    i64,
 		label32:  ^Label,
 		indirect: Operand_Memory_Indirect,
+		import_:  Operand_RIP_Relative_Import,
 }
 
 Descriptor_Type :: enum
@@ -200,6 +222,10 @@ print_operand :: proc(operand: ^Operand)
 		{
 			fmt.printf("rip_to(0x%016x)", operand.imm64)
 		}
+		case .RIP_Relative_Import:
+		{
+			fmt.printf("rip_import(%v:%s)", operand.import_.library_name, operand.import_.symbol_name)
+		}
 		case .Label_32:
 		{
 			fmt.printf("Label")
@@ -213,8 +239,12 @@ print_operand :: proc(operand: ^Operand)
 
 Program :: struct
 {
-	function_buffer: Buffer,
-	data_buffer:     Buffer,
+	function_buffer:       Buffer,
+	data_buffer:           Buffer,
+	import_libraries:      [dynamic]Import_Library,
+	entry_point:           ^Fn_Builder,
+	code_base_rva:         u32,
+	code_base_file_offset: int,
 }
 
 Fn_Builder :: struct
@@ -228,6 +258,8 @@ Fn_Builder :: struct
 	epilog_label: ^Label,
 	
 	instructions: [dynamic]Instruction,
+	
+	program: ^Program,
 	
 	result: ^Value,
 }
