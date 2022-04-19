@@ -16,4 +16,6 @@ popd
 
 pushd C:\development\odin-mass
 build\mass
+build\test
+echo Exit Code: %errorlevel%
 popd
