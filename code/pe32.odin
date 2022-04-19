@@ -3,6 +3,20 @@ package main
 import "core:fmt"
 import "core:sys/win32"
 
+Import_Name_To_Rva :: struct
+{
+	name: string,
+	rva:  u32,
+}
+
+Import_Library :: struct
+{
+	dll:             Import_Name_To_Rva,
+	iat_rva:         u32,
+	image_thunk_rva: u32,
+	functions:       []Import_Name_To_Rva,
+}
+
 @(private="file")
 short_name :: proc(name: string) -> [IMAGE_SIZEOF_SHORT_NAME]byte
 {
@@ -32,8 +46,21 @@ write_executable :: proc()
 		Characteristics      = IMAGE_FILE_EXECUTABLE_IMAGE | IMAGE_FILE_LARGE_ADDRESS_AWARE,
 	})
 	
-	IMPORT_DIRECTORY_INDEX :: 1
-	IAT_DIRECTORY_INDEX    :: 12
+	EXPORT_DIRECTORY_INDEX       :: 0
+	IMPORT_DIRECTORY_INDEX       :: 1
+	RESOURCE_DIRECTORY_INDEX     :: 2
+	EXCEPTION_DIRECTORY_INDEX    :: 3
+	SECURITY_DIRECTORY_INDEX     :: 4
+	RELOCATION_DIRECTORY_INDEX   :: 5
+	DEBUG_DIRECTORY_INDEX        :: 6
+	ARCHITECTURE_DIRECTORY_INDEX :: 7
+	GLOBAL_PTR_DIRECTORY_INDEX   :: 8
+	TLS_DIRECTORY_INDEX          :: 9
+	LOAD_CONFIG_DIRECTORY_INDEX  :: 10
+	BOUND_IMPORT_DIRECTORY_INDEX :: 11
+	IAT_DIRECTORY_INDEX          :: 12
+	DELAY_IMPORT_DIRECTORY_INDEX :: 13
+	CLR_DIRECTORY_INDEX          :: 14
 	
 	optional_header := buffer_allocate(&exe_buffer, IMAGE_OPTIONAL_HEADER64)
 	optional_header^ =
@@ -63,28 +90,7 @@ write_executable :: proc()
 		SizeOfHeapReserve           = 0x100000,
 		SizeOfHeapCommit            = 0x1000,
 		NumberOfRvaAndSizes         = IMAGE_NUMBEROF_DIRECTORY_ENTRIES, // TODO think about shrinking this if possible
-		DataDirectory               =
-		{
-			{}, // Export
-			{}, // Import
-			{}, // Resource
-			{}, // Exception
-			
-			{}, // Security
-			{}, // Relocation
-			{}, // Debug
-			{}, // Architecture
-			
-			{}, // Global PTR
-			{}, // TLS
-			{}, // Load Config
-			{}, // Bound Import
-			
-			{}, // IAT (Import Address Table)
-			{}, // Delay Import
-			{}, // CLR
-			{}, // Reserved
-		},
+		DataDirectory               = {},
 	}
 	
 	// .text section
@@ -128,91 +134,141 @@ write_executable :: proc()
 		section_offset += section.SizeOfRawData
 	}
 	
-	// .text segment
-	exe_buffer.occupied = int(text_section_header.PointerToRawData)
-	
-	buffer_append(&exe_buffer, [?]byte \
-	{
-		0x48, 0x83, 0xec, 0x28,             // sub rsp 0x28
-		0xb9, 0x2a, 0x00, 0x00, 0x00,       // mov ecx 0x2a
-		0xff, 0x15, 0xf1, 0x0f, 0x00, 0x00, // call ExitProcess
-		0xcc,                               // int 3
-	})
-	
-	// .rdata segment
-	
-	functions := [?]string{"ExitProcess"}
-	
-	Import :: struct
-	{
-		library_name: string,
-		functions:    []string,
-		// FIXME add patch locations
-	}
-	
-	kernel32: Import =
-	{
-		library_name = "kernel32.dll",
-		functions    = functions[:],
-	}
-	
 	file_offset_to_rva :: proc(buffer: ^Buffer, section_header: ^IMAGE_SECTION_HEADER) -> u32
 	{
 		return u32(buffer.occupied) - section_header.PointerToRawData + section_header.VirtualAddress
 	}
 	
+	// .text segment
+	exe_buffer.occupied = int(text_section_header.PointerToRawData)
+	
+	buffer_append(&exe_buffer, [?]byte \
+	{
+		0x48, 0x83, 0xec, 0x28,         // sub rsp, 0x28
+		0xb9, 0x2a, 0x00, 0x00, 0x00,   // mov ecx, 0x2a
+	})
+	
+	buffer_append_u8(&exe_buffer, 0xff) // call
+	buffer_append_u8(&exe_buffer, 0x15)
+	ExitProcess_rip_relative_address := buffer_allocate(&exe_buffer, i32)
+	ExitProcess_call_rva             := file_offset_to_rva(&exe_buffer, text_section_header)
+	
+	buffer_append_u8(&exe_buffer, 0xcc) // int 3
+	
+	// .rdata segment
+	
+	kernel32_functions := [?]Import_Name_To_Rva \
+	{
+		// @MachineCodePatch
+		{name = "ExitProcess",  rva = 0xcccccccc},
+		
+		{name = "GetStdHandle", rva = 0xcccccccc},
+		{name = "ReadConsoleA", rva = 0xcccccccc},
+	}
+	
+	user32_functions := [?]Import_Name_To_Rva \
+	{
+		{name = "ShowWindow", rva = 0xcccccccc},
+	}
+	
+	import_libraries := [?]Import_Library \
+	{
+		{
+			dll             = {name = "kernel32.dll", rva = 0xcccccccc},
+			iat_rva         = 0xcccccccc,
+			image_thunk_rva = 0xcccccccc,
+			functions       = kernel32_functions[:],
+		},
+		{
+			dll             = {name = "user32.dll", rva = 0xcccccccc},
+			iat_rva         = 0xcccccccc,
+			image_thunk_rva = 0xcccccccc,
+			functions       = user32_functions[:],
+		},
+	}
+	
 	exe_buffer.occupied = int(rdata_section_header.PointerToRawData)
 	
+	// Function Names
+	for lib in &import_libraries
+	{
+		for function in &lib.functions
+		{
+			function.rva = file_offset_to_rva(&exe_buffer, rdata_section_header)
+			buffer_append(&exe_buffer, u16(0))
+			
+			aligned_function_name_size := align(i32(len(function.name) + 1), 2)
+			copy(buffer_allocate_size(&exe_buffer, int(aligned_function_name_size)), function.name)
+		}
+	}
+	
 	// IAT
-	iat_rva := file_offset_to_rva(&exe_buffer, rdata_section_header)
-	ExitProcess_IAT_entry := buffer_allocate(&exe_buffer, i64)
-	_ = buffer_allocate(&exe_buffer, i64)
+	for lib in &import_libraries
+	{
+		lib.iat_rva = file_offset_to_rva(&exe_buffer, rdata_section_header)
+		for function in &lib.functions
+		{
+			buffer_append(&exe_buffer, u64(function.rva))
+		}
+		// End of IAT list
+		buffer_append(&exe_buffer, u64(0))
+	}
+	
+	// FIXME
+	// FIXME
+	// FIXME
+	// FIXME
+	// TODO try to put .rdata section before the .text section to avoid this patch @MachineCodePatch
+	ExitProcess_rip_relative_address^ = i32(import_libraries[0].iat_rva - ExitProcess_call_rva)
+	
 	optional_header.DataDirectory[IAT_DIRECTORY_INDEX] =
 	{
-		VirtualAddress = iat_rva,
-		Size           = u32(exe_buffer.occupied) - rdata_section_header.PointerToRawData,
+		VirtualAddress = import_libraries[0].iat_rva,
+		Size           = file_offset_to_rva(&exe_buffer, rdata_section_header) - import_libraries[0].iat_rva,
 	}
 	
-	// Names
-	kernel32_name_rva := file_offset_to_rva(&exe_buffer, rdata_section_header)
+	// Image thunks
+	for lib in &import_libraries
 	{
-		library_name := "KERNEL32.dll"
-		aligned_name_size := align(i32(len(library_name) + 1), 2)
-		copy(buffer_allocate_size(&exe_buffer, int(aligned_name_size)), library_name)
+		lib.image_thunk_rva = file_offset_to_rva(&exe_buffer, rdata_section_header)
+		for function in &lib.functions
+		{
+			buffer_append(&exe_buffer, u64(function.rva))
+		}
+		// End of image thunk list
+		buffer_append(&exe_buffer, u64(0))
 	}
 	
-	ExitProcess_name_rva := file_offset_to_rva(&exe_buffer, rdata_section_header)
-	ExitProcess_IAT_entry^ = i64(ExitProcess_name_rva)
+	// Library Names
+	for lib in &import_libraries
 	{
-		buffer_append(&exe_buffer, u16(0)) // Ordinal Hint, value not required
-		function_name := "ExitProcess"
-		
-		aligned_function_name_size := align(i32(len(function_name) + 1), 2)
-		copy(buffer_allocate_size(&exe_buffer, int(aligned_function_name_size)), function_name)
+		lib.dll.rva = file_offset_to_rva(&exe_buffer, rdata_section_header)
+		{
+			aligned_name_size := align(i32(len(lib.dll.name) + 1), 2)
+			copy(buffer_allocate_size(&exe_buffer, int(aligned_name_size)), lib.dll.name)
+		}
 	}
-	
-	// INT
-	int_rva := file_offset_to_rva(&exe_buffer, rdata_section_header)
-	ExitProcess_INT_entry := buffer_allocate(&exe_buffer, i64)
-	ExitProcess_INT_entry^ = i64(ExitProcess_name_rva)
-	_ = buffer_allocate(&exe_buffer, i64)
 	
 	// Import Directory
-	import_rva := file_offset_to_rva(&exe_buffer, rdata_section_header)
-	image_import_descriptor := buffer_allocate(&exe_buffer, IMAGE_IMPORT_DESCRIPTOR)
-	image_import_descriptor^ =
+	import_directory_rva := file_offset_to_rva(&exe_buffer, rdata_section_header)
+	for lib in &import_libraries
 	{
-		OriginalFirstThunk = int_rva,
-		Name               = kernel32_name_rva,
-		FirstThunk         = iat_rva,
+		image_import_descriptor := buffer_allocate(&exe_buffer, IMAGE_IMPORT_DESCRIPTOR)
+		image_import_descriptor^ =
+		{
+			OriginalFirstThunk = lib.image_thunk_rva,
+			Name               = lib.dll.rva,
+			FirstThunk         = lib.iat_rva,
+		}
 	}
 	
-	_ = buffer_allocate(&exe_buffer, IMAGE_IMPORT_DESCRIPTOR) // Null terminator
+	// End of IMAGE_IMPORT_DESCRIPTOR list
+	_ = buffer_allocate(&exe_buffer, IMAGE_IMPORT_DESCRIPTOR)
 	
 	optional_header.DataDirectory[IMPORT_DIRECTORY_INDEX] =
 	{
-		VirtualAddress = import_rva,
-		Size           = file_offset_to_rva(&exe_buffer, rdata_section_header) - import_rva,
+		VirtualAddress = import_directory_rva,
+		Size           = file_offset_to_rva(&exe_buffer, rdata_section_header) - import_directory_rva,
 	}
 	
 	exe_buffer.occupied = int(rdata_section_header.PointerToRawData + rdata_section_header.SizeOfRawData)
