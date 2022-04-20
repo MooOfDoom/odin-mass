@@ -119,7 +119,9 @@ fn_begin :: proc(program: ^Program) -> (result: ^Value, builder: Fn_Builder)
 					arguments = make([dynamic]Value, 0, 16),
 				},
 			}),
-			operand = label32(make_label(&program.function_buffer.memory[program.function_buffer.occupied])),
+			operand = label32(make_label(program.function_buffer.memory != nil ? \
+			                             &program.function_buffer.memory[program.function_buffer.occupied] :
+			                             nil)),
 		}),
 	}
 	result = builder.result

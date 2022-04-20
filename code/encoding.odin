@@ -239,18 +239,18 @@ encode_instruction :: proc(builder: ^Fn_Builder, instruction: Instruction)
 					program := builder.program
 					code_base_rva         := program.code_base_rva
 					code_base_file_offset := program.code_base_file_offset
-					next_instruction_address :=
+					next_instruction_rva  :=
 						i64(code_base_rva) + i64(buffer.occupied - code_base_file_offset) + size_of(i32)
 					
 					lib_loop: for lib in &program.import_libraries
 					{
 						if lib.dll.name != operand.import_.library_name do continue
 						
-						for function in &lib.functions
+						for sym in &lib.symbols
 						{
-							if function.name == operand.import_.symbol_name
+							if sym.name == operand.import_.symbol_name
 							{
-								diff := i64(function.iat_rva) - next_instruction_address
+								diff := i64(sym.iat_rva) - next_instruction_rva
 								assert(diff >= i64(min(i32)) && diff <= i64(max(i32)), "RIP relative import address too distant")
 								displacement := i32(diff)
 								

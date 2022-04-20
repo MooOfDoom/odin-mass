@@ -2,6 +2,7 @@ package main
 
 import "core:fmt"
 import "core:runtime"
+import "core:strings"
 import "core:sys/win32"
 
 test_program: Program
@@ -42,12 +43,16 @@ function_spec :: proc()
 	
 	before_each(proc()
 	{
+		free_all()
 		test_program =
 		{
-			function_buffer = make_buffer(128 * 1024, win32.PAGE_EXECUTE_READWRITE),
-			data_buffer     = make_buffer(1024 * 1024, win32.PAGE_READWRITE),
+			data_buffer      = make_buffer(128 * 1024, win32.PAGE_READWRITE),
+			function_buffer  = make_buffer(128 * 1024, win32.PAGE_EXECUTE_READWRITE),
+			import_libraries = make([dynamic]Import_Library, 0, 16),
 		}
-		free_all()
+		// FIXME make sure that this fits into i32
+		test_program.code_base_rva =
+			i32(uintptr(&test_program.function_buffer.memory[0]) - uintptr(&test_program.data_buffer.memory[0]))
 		
 		// NOTE(Lothar): Need to clear the fn_context so that its dynamic arrays don't continue to point
 		// into the freed temp buffer
@@ -63,51 +68,18 @@ function_spec :: proc()
 	
 	it("should write out an executable", proc()
 	{
-		program: Program =
-		{
-			function_buffer  = make_buffer(128 * 1024, win32.PAGE_EXECUTE_READWRITE),
-			data_buffer      = make_buffer(1024 * 1024, win32.PAGE_READWRITE),
-			import_libraries =
-			{
-				{
-					dll       = {name = "kernel32.dll"},
-					functions =
-					{
-						{name = "ExitProcess"},
-						// {name = "GetStdHandle"},
-						// {name = "ReadConsoleA"},
-					},
-				},
-				// {
-				// 	dll       = {name = "user32.dll"},
-				// 	functions =
-				// 	{
-				// 		{name = "ShowWindow"},
-				// 	},
-				// },
-			},
-		}
+		program := new(Program)
 		
-		ExitProcess_value := odin_function_value(`ExitProcess :: proc "std" (i32)`, nil)
-		ExitProcess_value.operand =
-		{
-			type = .RIP_Relative_Import,
-			byte_size = descriptor_byte_size(ExitProcess_value.descriptor),
-			import_ =
-			{
-				symbol_name  = "ExitProcess",
-				library_name = "kernel32.dll",
-			},
-		}
+		ExitProcess_value := odin_function_import(program, "kernel32.dll", `ExitProcess :: proc "std" (i32)`)
 		
-		checker_value, f := Function(&program)
+		checker_value, f := Function(program)
 		{
 			Return(Call(ExitProcess_value, value_from_i32(42)))
 		}
 		
 		program.entry_point = f
 		
-		write_executable(&program)
+		write_executable(program)
 	})
 	
 	it("should support short-circuiting &&", proc()
@@ -493,29 +465,38 @@ function_spec :: proc()
 	
 	it("should parse odin function forward declarations", proc()
 	{
-		odin_function_value(`proc "c" ()`, nil)
-		odin_function_value(`proc "c" (int)`, nil)
+		odin_function_descriptor(`proc "c" ()`)
+		odin_function_descriptor(`proc "c" (int)`)
 	})
 	
 	it("should be able to call imported function", proc()
 	{
-		kernel32 := win32.load_library_a("Kernel32.dll")
+		program := &test_program
+		GetStdHandle_value := odin_function_import(program,
+		                                           "kernel32.dll",
+		                                           `GetStdHandle :: proc "std" (i32) -> rawptr`)
+		
+		// TODO extract into a function
+		kernel32 := win32.load_library_a(strings.clone_to_cstring(GetStdHandle_value.operand.import_.library_name))
 		check(kernel32 != nil)
 		GetStdHandle_from_dll := win32.get_proc_address(kernel32, "GetStdHandle")
 		check(GetStdHandle_from_dll != nil)
 		
-		GetStdHandle_value := odin_function_value(`GetStdHandle :: proc "std" (i32) -> rawptr`, cast(fn_opaque)GetStdHandle_from_dll)
+		global := value_global(program, descriptor_pointer_to(GetStdHandle_value.descriptor))
 		
-		global := value_global(&test_program, GetStdHandle_value.descriptor)
-		{
-			check(global.operand.type == .RIP_Relative)
-			address := cast(^fn_opaque)uintptr(global.operand.imm64)
-			address^ = cast(fn_opaque)GetStdHandle_from_dll
-		}
+		address := cast(^fn_opaque)uintptr(global.operand.imm64)
+		address^ = cast(fn_opaque)GetStdHandle_from_dll
+		
+		import_ := program_find_import(program,
+		                               GetStdHandle_value.operand.import_.library_name,
+		                               GetStdHandle_value.operand.import_.symbol_name)
+		check(import_ != nil)
+		// FIXME make sure it fits into u32
+		import_.iat_rva = u32(uintptr(rawptr(address)) - uintptr(&program.data_buffer.memory[0]))
 		
 		checker_value, f := Function()
 		{
-			Return(Call(global, value_from_i32(win32.STD_INPUT_HANDLE)))
+			Return(Call(GetStdHandle_value, value_from_i32(win32.STD_INPUT_HANDLE)))
 		}
 		End_Function()
 		

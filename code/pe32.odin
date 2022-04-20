@@ -137,13 +137,13 @@ write_executable :: proc(program: ^Program)
 	// Function Names
 	for lib in &program.import_libraries
 	{
-		for function in &lib.functions
+		for sym in &lib.symbols
 		{
-			function.name_rva = file_offset_to_rva(&exe_buffer, rdata_section_header)
+			sym.name_rva = file_offset_to_rva(&exe_buffer, rdata_section_header)
 			buffer_append(&exe_buffer, u16(0))
 			
-			aligned_function_name_size := align(i32(len(function.name) + 1), 2)
-			copy(buffer_allocate_size(&exe_buffer, int(aligned_function_name_size)), function.name)
+			aligned_function_name_size := align(i32(len(sym.name) + 1), 2)
+			copy(buffer_allocate_size(&exe_buffer, int(aligned_function_name_size)), sym.name)
 		}
 	}
 	
@@ -151,10 +151,10 @@ write_executable :: proc(program: ^Program)
 	for lib in &program.import_libraries
 	{
 		lib.dll.iat_rva = file_offset_to_rva(&exe_buffer, rdata_section_header)
-		for function in &lib.functions
+		for sym in &lib.symbols
 		{
-			function.iat_rva = file_offset_to_rva(&exe_buffer, rdata_section_header)
-			buffer_append(&exe_buffer, u64(function.name_rva))
+			sym.iat_rva = file_offset_to_rva(&exe_buffer, rdata_section_header)
+			buffer_append(&exe_buffer, u64(sym.name_rva))
 		}
 		// End of IAT list
 		buffer_append(&exe_buffer, u64(0))
@@ -170,9 +170,9 @@ write_executable :: proc(program: ^Program)
 	for lib in &program.import_libraries
 	{
 		lib.image_thunk_rva = file_offset_to_rva(&exe_buffer, rdata_section_header)
-		for function in &lib.functions
+		for sym in &lib.symbols
 		{
-			buffer_append(&exe_buffer, u64(function.name_rva))
+			buffer_append(&exe_buffer, u64(sym.name_rva))
 		}
 		// End of image thunk list
 		buffer_append(&exe_buffer, u64(0))
@@ -213,9 +213,9 @@ write_executable :: proc(program: ^Program)
 	// .text segment
 	exe_buffer.occupied = int(text_section_header.PointerToRawData)
 	
-	program.code_base_file_offset = exe_buffer.occupied
-	program.code_base_rva = text_section_header.VirtualAddress
-	program.entry_point.buffer = &exe_buffer
+	program.code_base_file_offset   = exe_buffer.occupied
+	program.code_base_rva           = i32(text_section_header.VirtualAddress)
+	program.entry_point.buffer      = &exe_buffer
 	program.entry_point.code_offset = exe_buffer.occupied
 	fn_end(program.entry_point)
 	
@@ -235,11 +235,11 @@ write_executable :: proc(program: ^Program)
 	// 	{
 	// 		if lib.dll.name != "kernel32.dll" do continue
 			
-	// 		for function in &lib.functions
+	// 		for sym in &lib.symbols
 	// 		{
-	// 			if function.name == "ExitProcess"
+	// 			if sym.name == "ExitProcess"
 	// 			{
-	// 				ExitProcess_rip_relative_address^ = i32(function.iat_rva - ExitProcess_call_rva)
+	// 				ExitProcess_rip_relative_address^ = i32(sym.iat_rva - ExitProcess_call_rva)
 	// 				break lib_loop
 	// 			}
 	// 		}

@@ -44,7 +44,7 @@ Import_Name_To_Rva :: struct
 Import_Library :: struct
 {
 	dll:             Import_Name_To_Rva,
-	functions:       [dynamic]Import_Name_To_Rva,
+	symbols:         [dynamic]Import_Name_To_Rva,
 	image_thunk_rva: u32,
 }
 
@@ -239,11 +239,11 @@ print_operand :: proc(operand: ^Operand)
 
 Program :: struct
 {
-	function_buffer:       Buffer,
 	data_buffer:           Buffer,
+	function_buffer:       Buffer,
 	import_libraries:      [dynamic]Import_Library,
 	entry_point:           ^Fn_Builder,
-	code_base_rva:         u32,
+	code_base_rva:         i32,
 	code_base_file_offset: int,
 }
 
@@ -754,15 +754,11 @@ odin_function_return_value :: proc(forward_declaration: string) -> ^Value
 	return result
 }
 
-odin_function_value :: proc(forward_declaration: string, fn: fn_opaque) -> ^Value
+odin_function_descriptor :: proc(forward_declaration: string) -> ^Descriptor
 {
-	result := new_clone(Value \
-	{
-		descriptor = new_clone(Descriptor{type = .Function}),
-		operand = imm64(fn),
-	})
+	result := new_clone(Descriptor{type = .Function})
 	
-	result.descriptor.function.returns = odin_function_return_value(forward_declaration)
+	result.function.returns = odin_function_return_value(forward_declaration)
 	
 	start := strings.index_byte(forward_declaration, '(')
 	assert(start != -1)
@@ -780,7 +776,7 @@ odin_function_value :: proc(forward_declaration: string, fn: fn_opaque) -> ^Valu
 		arg_decls = arg_decls[length:]
 		if arg_desc != nil
 		{
-			append(&result.descriptor.function.arguments, Value \
+			append(&result.function.arguments, Value \
 			{
 				descriptor = arg_desc,
 				operand = {type = .Register, byte_size = descriptor_byte_size(arg_desc), reg = .C}, // FIXME should not use a hardcoded register here
@@ -790,4 +786,103 @@ odin_function_value :: proc(forward_declaration: string, fn: fn_opaque) -> ^Valu
 	}
 	
 	return result
+}
+
+odin_function_value :: proc(forward_declaration: string, fn: fn_opaque) -> ^Value
+{
+	return new_clone(Value \
+	{
+		descriptor = odin_function_descriptor(forward_declaration),
+		operand = imm64(fn),
+	})
+}
+
+import_symbol :: proc(program: ^Program, library_name: string, symbol_name: string) -> Operand
+{
+	library: ^Import_Library
+	for lib in &program.import_libraries
+	{
+		// FIXME Use case-insensitive compare
+		if lib.dll.name == library_name
+		{
+			library = &lib
+		}
+	}
+	
+	if library == nil
+	{
+		append(&program.import_libraries, Import_Library \
+		{
+			dll =
+			{
+				name     = library_name,
+				name_rva = 0xcccccccc,
+				iat_rva  = 0xcccccccc,
+			},
+			image_thunk_rva = 0xcccccccc,
+			symbols = make([dynamic]Import_Name_To_Rva, 0, 16),
+		})
+		library = &program.import_libraries[len(program.import_libraries) - 1]
+	}
+	
+	symbol: ^Import_Name_To_Rva
+	for sym in &library.symbols
+	{
+		if sym.name == symbol_name
+		{
+			symbol = &sym
+		}
+	}
+	
+	if symbol == nil
+	{
+		append(&library.symbols, Import_Name_To_Rva \
+		{
+			name     = symbol_name,
+			name_rva = 0xcccccccc,
+			iat_rva  = 0xcccccccc,
+		})
+		// symbol = &library.symbols[len(library.symbols) - 1]
+	}
+	
+	return Operand \
+	{
+		type = .RIP_Relative_Import,
+		byte_size = size_of(rawptr), // Size of the pointer
+		import_ =
+		{
+			library_name = library_name,
+			symbol_name  = symbol_name,
+		},
+	}
+}
+
+odin_function_import :: proc(program: ^Program, library_name: string, forward_declaration: string) -> ^Value
+{
+	symbol_name_end := strings.index_byte(forward_declaration, ':')
+	assert(symbol_name_end != -1)
+	symbol_name := strings.trim_space(forward_declaration[:symbol_name_end])
+	
+	return new_clone(Value \
+	{
+		descriptor = odin_function_descriptor(forward_declaration),
+		operand = import_symbol(program, library_name, symbol_name),
+	})
+}
+
+program_find_import :: proc(program: ^Program, library_name: string, symbol_name: string) -> ^Import_Name_To_Rva
+{
+	for lib in &program.import_libraries
+	{
+		if lib.dll.name != library_name do continue
+		
+		for sym in &lib.symbols
+		{
+			if sym.name == symbol_name
+			{
+				return &sym
+			}
+		}
+	}
+	return nil
 }
