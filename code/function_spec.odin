@@ -531,10 +531,13 @@ function_spec :: proc()
 		message_descriptor: Descriptor =
 		{
 			type = .Fixed_Size_Array,
-			array =
+			data =
 			{
-				item   = &descriptor_i8,
-				length = 4,
+				array =
+				{
+					item   = &descriptor_i8,
+					length = 4,
+				},
 			},
 		}
 		

@@ -4,7 +4,7 @@ import "core:fmt"
 import "core:mem"
 import "core:sys/win32"
 
-DEBUG_PRINT :: false
+DEBUG_PRINT :: true
 
 fn_reflect :: proc(builder: ^Fn_Builder, descriptor: ^Descriptor) -> ^Value
 {
@@ -66,9 +66,12 @@ struct_end :: proc(builder: ^Struct_Builder) -> ^Descriptor
 	result := new_clone(Descriptor \
 	{
 		type = .Struct,
-		struct_ =
+		data =
 		{
-			fields = make([]Descriptor_Struct_Field, builder.field_count),
+			struct_ =
+			{
+				fields = make([]Descriptor_Struct_Field, builder.field_count),
+			},
 		},
 	})
 	fields := result.struct_.fields
@@ -96,10 +99,13 @@ ensure_memory :: proc(value: ^Value) -> ^Value
 		operand =
 		{
 			type = .Memory_Indirect,
-			indirect =
+			data =
 			{
-				reg = value.operand.reg,
-				displacement = 0,
+				indirect =
+				{
+					reg          = value.operand.reg,
+					displacement = 0,
+				},
 			},
 		},
 	})
@@ -146,10 +152,13 @@ maybe_cast_to_tag :: proc(builder: ^Fn_Builder, name: string, value: ^Value) -> 
 		{
 			type = .Memory_Indirect,
 			byte_size = size_of(i64),
-			indirect =
+			data =
 			{
-				reg          = value.operand.reg,
-				displacement = 0,
+				indirect =
+				{
+					reg          = value.operand.reg,
+					displacement = 0,
+				},
 			},
 		},
 	}
@@ -161,7 +170,7 @@ maybe_cast_to_tag :: proc(builder: ^Fn_Builder, name: string, value: ^Value) -> 
 			constructor_descriptor := new_clone(Descriptor \
 			{
 				type = .Struct,
-				struct_ = struct_,
+				data = {struct_ = struct_},
 			})
 			pointer_descriptor := descriptor_pointer_to(constructor_descriptor)
 			result := new_clone(Value \
@@ -272,10 +281,13 @@ mass_spec :: proc()
 			{
 				type = .Memory_Indirect,
 				byte_size = 1, // NOTE(Lothar): Shouldn't matter, but must be 1, 2, 4, or 8 for lea
-				indirect =
+				data =
 				{
-					reg          = rsp.reg,
-					displacement = 0,
+					indirect =
+					{
+						reg          = rsp.reg,
+						displacement = 0,
+					},
 				},
 			},
 		}
@@ -283,9 +295,12 @@ mass_spec :: proc()
 		c_test_fn_descriptor: Descriptor =
 		{
 			type = .Function,
-			function =
+			data =
 			{
-				returns = &return_value,
+				function =
+				{
+					returns = &return_value,
+				},
 			},
 		}
 		
@@ -317,7 +332,7 @@ mass_spec :: proc()
 		// 	{
 		// 		type = .RIP_Relative,
 		// 		byte_size = size_of(i32),
-		// 		imm64 = i64(uintptr(&test_program.function_buffer.memory[0])),
+		// 		data = {imm64 = i64(uintptr(&test_program.function_buffer.memory[0]))},
 		// 	},
 		// }
 		global_a := value_global(&test_program, &descriptor_i32)
@@ -403,9 +418,12 @@ mass_spec :: proc()
 		option_i64_descriptor: Descriptor =
 		{
 			type = .Tagged_Union,
-			tagged_union =
+			data =
 			{
-				structs = constructors[:],
+				tagged_union =
+				{
+					structs = constructors[:],
+				},
 			},
 		}
 		
@@ -513,10 +531,13 @@ mass_spec :: proc()
 		array_descriptor: Descriptor =
 		{
 			type = .Fixed_Size_Array,
-			array =
+			data =
 			{
-				item   = &descriptor_i32,
-				length = len(array),
+				array =
+				{
+					item   = &descriptor_i32,
+					length = len(array),
+				},
 			},
 		}
 		
@@ -550,10 +571,13 @@ mass_spec :: proc()
 				{
 					type = .Memory_Indirect,
 					byte_size = item_byte_size,
-					indirect =
+					data =
 					{
-						reg          = rax.reg,
-						displacement = 0,
+						indirect =
+						{
+							reg          = rax.reg,
+							displacement = 0,
+						},
 					},
 				}
 				push_instruction(f, {inc, {pointer, {}, {}}, nil, #location()})

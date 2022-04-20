@@ -58,7 +58,8 @@ Operand :: struct
 {
 	type:      Operand_Type,
 	byte_size: i32,
-	// NOTE(Lothar): These should be in a raw union, but assignment doesn't work in Odin yet
+	using data: struct #raw_union
+	{
 		reg:      Register,
 		imm8:     i8,
 		imm32:    i32,
@@ -66,6 +67,7 @@ Operand :: struct
 		label32:  ^Label,
 		indirect: Operand_Memory_Indirect,
 		import_:  Operand_RIP_Relative_Import,
+	},
 }
 
 Descriptor_Type :: enum
@@ -119,13 +121,15 @@ Descriptor_Tagged_Union :: struct
 Descriptor :: struct
 {
 	type: Descriptor_Type,
-	// NOTE(Lothar): These should be in a raw union, but assignment doesn't work in Odin yet
+	using data: struct #raw_union
+	{
 		integer:      Descriptor_Integer,
 		pointer_to:   ^Descriptor,
 		array:        Descriptor_Fixed_Size_Array,
 		function:     Descriptor_Function,
 		struct_:      Descriptor_Struct,
 		tagged_union: Descriptor_Tagged_Union,
+	},
 }
 
 Value :: struct
@@ -138,23 +142,23 @@ descriptor_void: Descriptor = {type = .Void}
 
 descriptor_i8: Descriptor =
 {
-	type    = .Integer,
-	integer = {byte_size = 1},
+	type = .Integer,
+	data = {integer = {byte_size = 1}},
 }
 descriptor_i16: Descriptor =
 {
-	type    = .Integer,
-	integer = {byte_size = 2},
+	type = .Integer,
+	data = {integer = {byte_size = 2}},
 }
 descriptor_i32: Descriptor =
 {
-	type    = .Integer,
-	integer = {byte_size = 4},
+	type = .Integer,
+	data = {integer = {byte_size = 4}},
 }
 descriptor_i64: Descriptor =
 {
-	type    = .Integer,
-	integer = {byte_size = 8},
+	type = .Integer,
+	data = {integer = {byte_size = 8}},
 }
 
 // @Volatile @Reflection
@@ -176,9 +180,12 @@ struct_reflection_fields := [?]Descriptor_Struct_Field \
 descriptor_struct_reflection: Descriptor =
 {
 	type = .Struct,
-	struct_ =
+	data =
 	{
-		fields = struct_reflection_fields[:],
+		struct_ =
+		{
+			fields = struct_reflection_fields[:],
+		},
 	},
 }
 
@@ -286,55 +293,55 @@ Register :: enum u8
 	R15 = 0b1111,
 }
 
-al := Operand{type = .Register, byte_size = 1, reg = .A}
-cl := Operand{type = .Register, byte_size = 1, reg = .C}
-dl := Operand{type = .Register, byte_size = 1, reg = .D}
-bl := Operand{type = .Register, byte_size = 1, reg = .B}
+al := Operand{type = .Register, byte_size = 1, data = {reg = .A}}
+cl := Operand{type = .Register, byte_size = 1, data = {reg = .C}}
+dl := Operand{type = .Register, byte_size = 1, data = {reg = .D}}
+bl := Operand{type = .Register, byte_size = 1, data = {reg = .B}}
 
-ax := Operand{type = .Register, byte_size = 2, reg = .A}
-cx := Operand{type = .Register, byte_size = 2, reg = .C}
-dx := Operand{type = .Register, byte_size = 2, reg = .D}
-bx := Operand{type = .Register, byte_size = 2, reg = .B}
-sp := Operand{type = .Register, byte_size = 2, reg = .SP}
-bp := Operand{type = .Register, byte_size = 2, reg = .BP}
-si := Operand{type = .Register, byte_size = 2, reg = .SI}
-di := Operand{type = .Register, byte_size = 2, reg = .DI}
+ax := Operand{type = .Register, byte_size = 2, data = {reg = .A}}
+cx := Operand{type = .Register, byte_size = 2, data = {reg = .C}}
+dx := Operand{type = .Register, byte_size = 2, data = {reg = .D}}
+bx := Operand{type = .Register, byte_size = 2, data = {reg = .B}}
+sp := Operand{type = .Register, byte_size = 2, data = {reg = .SP}}
+bp := Operand{type = .Register, byte_size = 2, data = {reg = .BP}}
+si := Operand{type = .Register, byte_size = 2, data = {reg = .SI}}
+di := Operand{type = .Register, byte_size = 2, data = {reg = .DI}}
 
-eax := Operand{type = .Register, byte_size = 4, reg = .A}
-ecx := Operand{type = .Register, byte_size = 4, reg = .C}
-edx := Operand{type = .Register, byte_size = 4, reg = .D}
-ebx := Operand{type = .Register, byte_size = 4, reg = .B}
-esp := Operand{type = .Register, byte_size = 4, reg = .SP}
-ebp := Operand{type = .Register, byte_size = 4, reg = .BP}
-esi := Operand{type = .Register, byte_size = 4, reg = .SI}
-edi := Operand{type = .Register, byte_size = 4, reg = .DI}
+eax := Operand{type = .Register, byte_size = 4, data = {reg = .A}}
+ecx := Operand{type = .Register, byte_size = 4, data = {reg = .C}}
+edx := Operand{type = .Register, byte_size = 4, data = {reg = .D}}
+ebx := Operand{type = .Register, byte_size = 4, data = {reg = .B}}
+esp := Operand{type = .Register, byte_size = 4, data = {reg = .SP}}
+ebp := Operand{type = .Register, byte_size = 4, data = {reg = .BP}}
+esi := Operand{type = .Register, byte_size = 4, data = {reg = .SI}}
+edi := Operand{type = .Register, byte_size = 4, data = {reg = .DI}}
 
-r8d  := Operand{type = .Register, byte_size = 4, reg = .R8}
-r9d  := Operand{type = .Register, byte_size = 4, reg = .R9}
-r10d := Operand{type = .Register, byte_size = 4, reg = .R10}
-r11d := Operand{type = .Register, byte_size = 4, reg = .R11}
-r12d := Operand{type = .Register, byte_size = 4, reg = .R12}
-r13d := Operand{type = .Register, byte_size = 4, reg = .R13}
-r14d := Operand{type = .Register, byte_size = 4, reg = .R14}
-r15d := Operand{type = .Register, byte_size = 4, reg = .R15}
+r8d  := Operand{type = .Register, byte_size = 4, data = {reg = .R8}}
+r9d  := Operand{type = .Register, byte_size = 4, data = {reg = .R9}}
+r10d := Operand{type = .Register, byte_size = 4, data = {reg = .R10}}
+r11d := Operand{type = .Register, byte_size = 4, data = {reg = .R11}}
+r12d := Operand{type = .Register, byte_size = 4, data = {reg = .R12}}
+r13d := Operand{type = .Register, byte_size = 4, data = {reg = .R13}}
+r14d := Operand{type = .Register, byte_size = 4, data = {reg = .R14}}
+r15d := Operand{type = .Register, byte_size = 4, data = {reg = .R15}}
 
-rax := Operand{type = .Register, byte_size = 8, reg = .A}
-rcx := Operand{type = .Register, byte_size = 8, reg = .C}
-rdx := Operand{type = .Register, byte_size = 8, reg = .D}
-rbx := Operand{type = .Register, byte_size = 8, reg = .B}
-rsp := Operand{type = .Register, byte_size = 8, reg = .SP}
-rbp := Operand{type = .Register, byte_size = 8, reg = .BP}
-rsi := Operand{type = .Register, byte_size = 8, reg = .SI}
-rdi := Operand{type = .Register, byte_size = 8, reg = .DI}
+rax := Operand{type = .Register, byte_size = 8, data = {reg = .A}}
+rcx := Operand{type = .Register, byte_size = 8, data = {reg = .C}}
+rdx := Operand{type = .Register, byte_size = 8, data = {reg = .D}}
+rbx := Operand{type = .Register, byte_size = 8, data = {reg = .B}}
+rsp := Operand{type = .Register, byte_size = 8, data = {reg = .SP}}
+rbp := Operand{type = .Register, byte_size = 8, data = {reg = .BP}}
+rsi := Operand{type = .Register, byte_size = 8, data = {reg = .SI}}
+rdi := Operand{type = .Register, byte_size = 8, data = {reg = .DI}}
 
-r8  := Operand{type = .Register, byte_size = 8, reg = .R8}
-r9  := Operand{type = .Register, byte_size = 8, reg = .R9}
-r10 := Operand{type = .Register, byte_size = 8, reg = .R10}
-r11 := Operand{type = .Register, byte_size = 8, reg = .R11}
-r12 := Operand{type = .Register, byte_size = 8, reg = .R12}
-r13 := Operand{type = .Register, byte_size = 8, reg = .R13}
-r14 := Operand{type = .Register, byte_size = 8, reg = .R14}
-r15 := Operand{type = .Register, byte_size = 8, reg = .R15}
+r8  := Operand{type = .Register, byte_size = 8, data = {reg = .R8}}
+r9  := Operand{type = .Register, byte_size = 8, data = {reg = .R9}}
+r10 := Operand{type = .Register, byte_size = 8, data = {reg = .R10}}
+r11 := Operand{type = .Register, byte_size = 8, data = {reg = .R11}}
+r12 := Operand{type = .Register, byte_size = 8, data = {reg = .R12}}
+r13 := Operand{type = .Register, byte_size = 8, data = {reg = .R13}}
+r14 := Operand{type = .Register, byte_size = 8, data = {reg = .R14}}
+r15 := Operand{type = .Register, byte_size = 8, data = {reg = .R15}}
 
 make_label :: proc(target: rawptr = nil) -> ^Label
 {
@@ -347,27 +354,27 @@ make_label :: proc(target: rawptr = nil) -> ^Label
 
 label32 :: proc(label: ^Label) -> Operand
 {
-	return Operand{type = .Label_32, byte_size = 4, label32 = label}
+	return Operand{type = .Label_32, byte_size = 4, data = {label32 = label}}
 }
 
 imm8 :: proc(value: i8) -> Operand
 {
-	return Operand{type = .Immediate_8, byte_size = size_of(value), imm8 = value}
+	return Operand{type = .Immediate_8, byte_size = size_of(value), data = {imm8 = value}}
 }
 
 imm32 :: proc(value: i32) -> Operand
 {
-	return Operand{type = .Immediate_32, byte_size = size_of(value), imm32 = value}
+	return Operand{type = .Immediate_32, byte_size = size_of(value), data = {imm32 = value}}
 }
 
 imm64_i64 :: proc(value: i64) -> Operand
 {
-	return Operand{type = .Immediate_64, byte_size = size_of(value), imm64 = value}
+	return Operand{type = .Immediate_64, byte_size = size_of(value), data = {imm64 = value}}
 }
 
 imm64_rawptr :: proc(value: rawptr) -> Operand
 {
-	return Operand{type = .Immediate_64, byte_size = size_of(value), imm64 = i64(uintptr(value))}
+	return Operand{type = .Immediate_64, byte_size = size_of(value), data = {imm64 = i64(uintptr(value))}}
 }
 
 imm64 :: proc
@@ -406,7 +413,7 @@ imm_auto :: proc
 
 stack :: proc(offset: i32, byte_size: i32) -> Operand
 {
-	return Operand{type = .Memory_Indirect, byte_size = byte_size, indirect = {reg = .SP, displacement = offset}}
+	return Operand{type = .Memory_Indirect, byte_size = byte_size, data = {indirect = {reg = .SP, displacement = offset}}}
 }
 
 value_from_i8 :: proc(integer: i8) -> ^Value
@@ -447,7 +454,7 @@ value_register_for_descriptor :: proc(reg: Register, descriptor: ^Descriptor) ->
 		{
 			type      = .Register,
 			byte_size = byte_size,
-			reg       = reg,
+			data      = {reg = reg},
 		},
 	})
 }
@@ -464,9 +471,9 @@ value_global :: proc(program: ^Program, descriptor: ^Descriptor) -> ^Value
 		descriptor = descriptor,
 		operand =
 		{
-			type = .RIP_Relative,
+			type      = .RIP_Relative,
 			byte_size = byte_size,
-			imm64 = i64(uintptr(address)),
+			data      = {imm64 = i64(uintptr(address))},
 		},
 	})
 	return result
@@ -476,8 +483,8 @@ descriptor_pointer_to :: proc(descriptor: ^Descriptor) -> ^Descriptor
 {
 	return new_clone(Descriptor \
 	{
-		type       = .Pointer,
-		pointer_to = descriptor,
+		type = .Pointer,
+		data = {pointer_to = descriptor},
 	})
 }
 
@@ -485,11 +492,14 @@ descriptor_array_of :: proc(descriptor: ^Descriptor, length: i32) -> ^Descriptor
 {
 	return new_clone(Descriptor \
 	{
-		type  = .Fixed_Size_Array,
-		array =
+		type = .Fixed_Size_Array,
+		data =
 		{
-			item   = descriptor,
-			length = length,
+			array =
+			{
+				item   = descriptor,
+				length = length,
+			},
 		},
 	})
 }
@@ -779,7 +789,7 @@ odin_function_descriptor :: proc(forward_declaration: string) -> ^Descriptor
 			append(&result.function.arguments, Value \
 			{
 				descriptor = arg_desc,
-				operand = {type = .Register, byte_size = descriptor_byte_size(arg_desc), reg = .C}, // FIXME should not use a hardcoded register here
+				operand = {type = .Register, byte_size = descriptor_byte_size(arg_desc), data = {reg = .C}}, // FIXME should not use a hardcoded register here
 			})
 			arg_index += 1
 		}
@@ -849,10 +859,13 @@ import_symbol :: proc(program: ^Program, library_name: string, symbol_name: stri
 	{
 		type = .RIP_Relative_Import,
 		byte_size = size_of(rawptr), // Size of the pointer
-		import_ =
+		data =
 		{
-			library_name = library_name,
-			symbol_name  = symbol_name,
+			import_ =
+			{
+				library_name = library_name,
+				symbol_name  = symbol_name,
+			},
 		},
 	}
 }

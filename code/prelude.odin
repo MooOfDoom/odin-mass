@@ -3,6 +3,7 @@ package main
 import "core:fmt"
 import "core:mem"
 import "core:runtime"
+import "core:strings"
 import "core:sys/win32"
 
 fn_opaque                         :: distinct rawptr
@@ -227,13 +228,14 @@ buffer_append_u8 :: proc(buffer: ^Buffer, value: u8)
 
 print_buffer :: proc(buffer: []byte)
 {
+	sb := strings.make_builder(context.temp_allocator)
 	for i in 0 ..< len(buffer)
 	{
-		fmt.printf("%2x", buffer[i])
+		fmt.sbprintf(&sb, "%2x", buffer[i])
 		if i < len(buffer) - 1
 		{
-			fmt.printf(" ")
+			fmt.sbprintf(&sb, " ")
 		}
 	}
-	fmt.printf("\n")
+	fmt.printf("%v\n", strings.to_string(sb))
 }
