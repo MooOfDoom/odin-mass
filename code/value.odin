@@ -180,13 +180,10 @@ struct_reflection_fields := [?]Descriptor_Struct_Field \
 descriptor_struct_reflection: Descriptor =
 {
 	type = .Struct,
-	data =
+	data = {struct_ =
 	{
-		struct_ =
-		{
-			fields = struct_reflection_fields[:],
-		},
-	},
+		fields = struct_reflection_fields[:],
+	}},
 }
 
 void_value: Value =
@@ -493,14 +490,11 @@ descriptor_array_of :: proc(descriptor: ^Descriptor, length: i32) -> ^Descriptor
 	return new_clone(Descriptor \
 	{
 		type = .Fixed_Size_Array,
-		data =
+		data = {array =
 		{
-			array =
-			{
-				item   = descriptor,
-				length = length,
-			},
-		},
+			item   = descriptor,
+			length = length,
+		}},
 	})
 }
 
@@ -859,14 +853,11 @@ import_symbol :: proc(program: ^Program, library_name: string, symbol_name: stri
 	{
 		type = .RIP_Relative_Import,
 		byte_size = size_of(rawptr), // Size of the pointer
-		data =
+		data = {import_ =
 		{
-			import_ =
-			{
-				library_name = library_name,
-				symbol_name  = symbol_name,
-			},
-		},
+			library_name = library_name,
+			symbol_name  = symbol_name,
+		}},
 	}
 }
 

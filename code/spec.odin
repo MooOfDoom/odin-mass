@@ -66,13 +66,10 @@ struct_end :: proc(builder: ^Struct_Builder) -> ^Descriptor
 	result := new_clone(Descriptor \
 	{
 		type = .Struct,
-		data =
+		data = {struct_ =
 		{
-			struct_ =
-			{
-				fields = make([]Descriptor_Struct_Field, builder.field_count),
-			},
-		},
+			fields = make([]Descriptor_Struct_Field, builder.field_count),
+		}},
 	})
 	fields := result.struct_.fields
 	
@@ -99,14 +96,11 @@ ensure_memory :: proc(value: ^Value) -> ^Value
 		operand =
 		{
 			type = .Memory_Indirect,
-			data =
+			data = {indirect =
 			{
-				indirect =
-				{
-					reg          = value.operand.reg,
-					displacement = 0,
-				},
-			},
+				reg          = value.operand.reg,
+				displacement = 0,
+			}},
 		},
 	})
 }
@@ -150,16 +144,13 @@ maybe_cast_to_tag :: proc(builder: ^Fn_Builder, name: string, value: ^Value) -> 
 		descriptor = &descriptor_i64,
 		operand =
 		{
-			type = .Memory_Indirect,
+			type      = .Memory_Indirect,
 			byte_size = size_of(i64),
-			data =
+			data = {indirect =
 			{
-				indirect =
-				{
-					reg          = value.operand.reg,
-					displacement = 0,
-				},
-			},
+				reg          = value.operand.reg,
+				displacement = 0,
+			}},
 		},
 	}
 	
@@ -279,29 +270,23 @@ mass_spec :: proc()
 			descriptor = point_struct_descriptor,
 			operand =
 			{
-				type = .Memory_Indirect,
+				type      = .Memory_Indirect,
 				byte_size = 1, // NOTE(Lothar): Shouldn't matter, but must be 1, 2, 4, or 8 for lea
-				data =
+				data = {indirect =
 				{
-					indirect =
-					{
-						reg          = rsp.reg,
-						displacement = 0,
-					},
-				},
+					reg          = rsp.reg,
+					displacement = 0,
+				}},
 			},
 		}
 		
 		c_test_fn_descriptor: Descriptor =
 		{
 			type = .Function,
-			data =
+			data = {function =
 			{
-				function =
-				{
-					returns = &return_value,
-				},
-			},
+				returns = &return_value,
+			}},
 		}
 		
 		c_test_fn_value: Value =
@@ -418,13 +403,10 @@ mass_spec :: proc()
 		option_i64_descriptor: Descriptor =
 		{
 			type = .Tagged_Union,
-			data =
+			data = {tagged_union =
 			{
-				tagged_union =
-				{
-					structs = constructors[:],
-				},
-			},
+				structs = constructors[:],
+			}},
 		}
 		
 		with_default_value, f := Function()
@@ -531,14 +513,11 @@ mass_spec :: proc()
 		array_descriptor: Descriptor =
 		{
 			type = .Fixed_Size_Array,
-			data =
+			data = {array =
 			{
-				array =
-				{
-					item   = &descriptor_i32,
-					length = len(array),
-				},
-			},
+				item   = &descriptor_i32,
+				length = len(array),
+			}},
 		}
 		
 		array_pointer_descriptor := descriptor_pointer_to(&array_descriptor)
@@ -571,14 +550,11 @@ mass_spec :: proc()
 				{
 					type = .Memory_Indirect,
 					byte_size = item_byte_size,
-					data =
+					data = {indirect =
 					{
-						indirect =
-						{
-							reg          = rax.reg,
-							displacement = 0,
-						},
-					},
+						reg          = rax.reg,
+						displacement = 0,
+					}},
 				}
 				push_instruction(f, {inc, {pointer, {}, {}}, nil, #location()})
 				push_instruction(f, {add, {temp.operand, imm32(i32(item_byte_size)), {}}, nil, #location()})

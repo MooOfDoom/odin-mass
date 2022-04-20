@@ -114,13 +114,10 @@ fn_begin :: proc(program: ^Program) -> (result: ^Value, builder: Fn_Builder)
 			descriptor = new_clone(Descriptor \
 			{
 				type = .Function,
-				data =
+				data = {function =
 				{
-					function =
-					{
-						arguments = make([dynamic]Value, 0, 16),
-					},
-				},
+					arguments = make([dynamic]Value, 0, 16),
+				}},
 			}),
 			operand = label32(make_label(program.function_buffer.memory != nil ? \
 			                             &program.function_buffer.memory[program.function_buffer.occupied] :
