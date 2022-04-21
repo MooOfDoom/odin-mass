@@ -41,10 +41,43 @@ encode_rdata_section :: proc(program: ^Program, header: ^IMAGE_SECTION_HEADER) -
 		return u32(buffer.occupied) + header.VirtualAddress
 	}
 	
+	expected_encoded_size: int
+	for lib in &program.import_libraries
+	{
+		// Aligned to 2 bytes c string of library name
+		expected_encoded_size += align(len(lib.dll.name) + 1, 2)
+		for sym in &lib.symbols
+		{
+			{
+				// Ordinal Hint, value not required
+				expected_encoded_size += size_of(u16)
+				// Aligned to 2 bytes c string of symbol name
+				expected_encoded_size += align(len(sym.name) + 1, 2)
+			}
+			{
+				// IAT placeholder for symbol pointer
+				expected_encoded_size += size_of(u64)
+			}
+			{
+				// Image Thunk
+				expected_encoded_size += size_of(u64)
+			}
+			{
+				// Import Directory
+				expected_encoded_size += size_of(IMAGE_IMPORT_DESCRIPTOR)
+			}
+		}
+		// IAT zero termination
+		expected_encoded_size += size_of(u64)
+		// Image Thunk zero termination
+		expected_encoded_size += size_of(u64)
+	}
+	// Import Directory zero termination
+	expected_encoded_size += size_of(IMAGE_IMPORT_DESCRIPTOR)
+	
 	result: Encoded_Rdata_Section =
 	{
-		// FIXME dynamically resize the buffer
-		buffer = make_buffer(1024 * 1024, win32.PAGE_READWRITE),
+		buffer = make_buffer(expected_encoded_size, win32.PAGE_READWRITE),
 	}
 	
 	buffer := &result.buffer
@@ -63,7 +96,6 @@ encode_rdata_section :: proc(program: ^Program, header: ^IMAGE_SECTION_HEADER) -
 	}
 	
 	// IAT
-	
 	result.iat_rva = get_rva(buffer, header)
 	for lib in &program.import_libraries
 	{
@@ -116,6 +148,8 @@ encode_rdata_section :: proc(program: ^Program, header: ^IMAGE_SECTION_HEADER) -
 	// End of IMAGE_IMPORT_DESCRIPTOR list
 	_ = buffer_allocate(buffer, IMAGE_IMPORT_DESCRIPTOR)
 	
+	assert(buffer.occupied == expected_encoded_size, "Size of encoded rdata not what was expected")
+	
 	result.import_directory_size = get_rva(buffer, header) - result.import_directory_rva
 	
 	header.Misc.VirtualSize = u32(buffer.occupied)
@@ -124,14 +158,49 @@ encode_rdata_section :: proc(program: ^Program, header: ^IMAGE_SECTION_HEADER) -
 	return result
 }
 
-write_executable :: proc(program: ^Program)
+Encoded_Text_Section :: struct
 {
+	buffer:          Buffer,
+	entry_point_rva: u32,
+}
+
+encode_text_section :: proc(program: ^Program, header: ^IMAGE_SECTION_HEADER) -> Encoded_Text_Section
+{
+	get_rva :: proc(buffer: ^Buffer, header: ^IMAGE_SECTION_HEADER) -> u32
+	{
+		return u32(buffer.occupied) + header.VirtualAddress
+	}
+	
 	max_code_size := estimate_max_code_size_in_bytes(program)
 	max_code_size = align(max_code_size, PE32_FILE_ALIGNMENT)
 	
-	assert(fits_into_i32(max_code_size))
-	max_code_size_u32 := u32(max_code_size)
+	result: Encoded_Text_Section =
+	{
+		buffer = make_buffer(max_code_size, win32.PAGE_READWRITE),
+	}
 	
+	buffer := &result.buffer
+	
+	program.code_base_rva = i32(header.VirtualAddress)
+	
+	for function in &program.functions
+	{
+		if &function == program.entry_point
+		{
+			result.entry_point_rva = get_rva(buffer, header)
+		}
+		fn_encode(buffer, &function)
+	}
+	
+	assert(fits_into_u32(buffer.occupied), "Text section too large")
+	header.Misc.VirtualSize = u32(buffer.occupied)
+	header.SizeOfRawData = align(u32(buffer.occupied), PE32_FILE_ALIGNMENT)
+	
+	return result
+}
+
+write_executable :: proc(program: ^Program)
+{
 	short_name :: proc(name: string) -> [IMAGE_SIZEOF_SHORT_NAME]byte
 	{
 		result: [IMAGE_SIZEOF_SHORT_NAME]byte
@@ -144,28 +213,17 @@ write_executable :: proc(program: ^Program)
 	{
 		{
 			Name             = short_name(".rdata"),
-			Misc             = {},
-			VirtualAddress   = 0,
-			SizeOfRawData    = 0,
-			PointerToRawData = 0,
 			Characteristics  = IMAGE_SCN_CNT_INITIALIZED_DATA | IMAGE_SCN_MEM_READ,
 		},
 		{
 			Name             = short_name(".text"),
-			Misc             = {VirtualSize = 0x10}, // FIXME size of machine code in bytes
-			VirtualAddress   = 0,
-			SizeOfRawData    = max_code_size_u32,
-			PointerToRawData = 0,
 			Characteristics  = IMAGE_SCN_CNT_INITIALIZED_DATA | IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_EXECUTE,
 		},
 		{},
 	}
 	
-	rdata_section_header := &sections[0]
-	text_section_header  := &sections[1]
-	
 	file_size_of_headers: u32 = (size_of(IMAGE_DOS_HEADER)        +
-	                             size_of(u32)                     + // IMAGE_NT_SIGNATURE
+	                             size_of(i32)                     + // IMAGE_NT_SIGNATURE
 	                             size_of(IMAGE_FILE_HEADER)       +
 	                             size_of(IMAGE_OPTIONAL_HEADER64) +
 	                             size_of(sections))
@@ -173,30 +231,30 @@ write_executable :: proc(program: ^Program)
 	file_size_of_headers = align(file_size_of_headers, PE32_FILE_ALIGNMENT)
 	virtual_size_of_headers := align(file_size_of_headers, PE32_SECTION_ALIGNMENT)
 	
-	rdata_section_header.VirtualAddress = virtual_size_of_headers
+	// Prepare .rdata section
+	rdata_section_header := &sections[0]
+	rdata_section_header.PointerToRawData = file_size_of_headers
+	rdata_section_header.VirtualAddress   = virtual_size_of_headers
 	encoded_rdata_section := encode_rdata_section(program, rdata_section_header)
 	rdata_section_buffer  := encoded_rdata_section.buffer
 	
-	virtual_size_of_image: u32
+	// Prepare .text section
+	text_section_header  := &sections[1]
+	text_section_header.PointerToRawData =
+		rdata_section_header.PointerToRawData + rdata_section_header.SizeOfRawData
+	text_section_header.VirtualAddress   =
+		rdata_section_header.VirtualAddress + align(rdata_section_header.SizeOfRawData, PE32_SECTION_ALIGNMENT)
+	encoded_text_section := encode_text_section(program, text_section_header)
+	text_section_buffer  := encoded_text_section.buffer
 	
-	{
-		// Update offsets for sections
-		section_offset         := file_size_of_headers
-		virtual_section_offset := virtual_size_of_headers
-		non_null_sections := sections[:len(sections) - 1]
-		for section in &non_null_sections
-		{
-			section.PointerToRawData = section_offset
-			section_offset += section.SizeOfRawData
-			
-			section.VirtualAddress = virtual_section_offset
-			virtual_section_offset += align(section.SizeOfRawData, PE32_SECTION_ALIGNMENT)
-		}
-		virtual_size_of_image = virtual_section_offset
-	}
+	// Calculate total size of image in memory once loaded
+	virtual_size_of_image :=
+		text_section_header.VirtualAddress + align(text_section_header.SizeOfRawData, PE32_SECTION_ALIGNMENT)
 	
-	// TODO this should be dynamically sized or correctly estimated
-	exe_buffer := make_buffer(1024 * 1024, win32.PAGE_READWRITE)
+	exe_buffer := make_buffer(int(file_size_of_headers               +
+	                              rdata_section_header.SizeOfRawData +
+	                              text_section_header.SizeOfRawData),
+	                          win32.PAGE_READWRITE)
 	
 	dos_header := buffer_allocate(&exe_buffer, IMAGE_DOS_HEADER)
 	dos_header^ =
@@ -215,16 +273,13 @@ write_executable :: proc(program: ^Program)
 		Characteristics      = IMAGE_FILE_EXECUTABLE_IMAGE | IMAGE_FILE_LARGE_ADDRESS_AWARE,
 	})
 	
-	base_of_code: u32 = 0x2000 // FIXME use section alignment
-	address_of_entry_relative_to_base_of_code: u32 = 0
-	
 	optional_header := buffer_allocate(&exe_buffer, IMAGE_OPTIONAL_HEADER64)
 	optional_header^ =
 	{
 		Magic                       = IMAGE_NT_OPTIONAL_HDR64_MAGIC,
 		SizeOfCode                  = text_section_header.SizeOfRawData,
 		SizeOfInitializedData       = rdata_section_header.SizeOfRawData,
-		AddressOfEntryPoint         = 0,
+		AddressOfEntryPoint         = encoded_text_section.entry_point_rva,
 		BaseOfCode                  = text_section_header.VirtualAddress,
 		ImageBase                   = 0x0000000140000000, // Does not matter as we are using dynamic base
 		SectionAlignment            = PE32_SECTION_ALIGNMENT,
@@ -245,12 +300,20 @@ write_executable :: proc(program: ^Program)
 		SizeOfHeapReserve           = 0x100000,
 		SizeOfHeapCommit            = 0x1000,
 		NumberOfRvaAndSizes         = IMAGE_NUMBEROF_DIRECTORY_ENTRIES, // TODO think about shrinking this if possible
-		DataDirectory               = {},
+		DataDirectory               =
+		{
+			IAT_DIRECTORY_INDEX =
+			{
+				VirtualAddress = encoded_rdata_section.iat_rva,
+				Size           = encoded_rdata_section.iat_size,
+			},
+			IMPORT_DIRECTORY_INDEX =
+			{
+				VirtualAddress = encoded_rdata_section.import_directory_rva,
+				Size           = encoded_rdata_section.import_directory_size,
+			},
+		},
 	}
-	optional_header.DataDirectory[IAT_DIRECTORY_INDEX].VirtualAddress    = encoded_rdata_section.iat_rva
-	optional_header.DataDirectory[IAT_DIRECTORY_INDEX].Size              = encoded_rdata_section.iat_size
-	optional_header.DataDirectory[IMPORT_DIRECTORY_INDEX].VirtualAddress = encoded_rdata_section.import_directory_rva
-	optional_header.DataDirectory[IMPORT_DIRECTORY_INDEX].Size           = encoded_rdata_section.import_directory_size
 	
 	// Write out sections
 	buffer_append(&exe_buffer, sections)
@@ -263,26 +326,11 @@ write_executable :: proc(program: ^Program)
 	// .rdata segment
 	exe_buffer.occupied = int(rdata_section_header.PointerToRawData)
 	copy(buffer_allocate_size(&exe_buffer, rdata_section_buffer.occupied), rdata_section_buffer.memory[:rdata_section_buffer.occupied])
-	
-	actual_size_of_rdata := u32(exe_buffer.occupied) - rdata_section_header.PointerToRawData
-	fmt.printf("%x\n", actual_size_of_rdata)
-	assert(actual_size_of_rdata == rdata_section_header.Misc.VirtualSize, "rdata declared size does not match actual size")
+	exe_buffer.occupied = int(rdata_section_header.PointerToRawData + rdata_section_header.SizeOfRawData)
 	
 	// .text segment
 	exe_buffer.occupied = int(text_section_header.PointerToRawData)
-	
-	program.code_base_file_offset = exe_buffer.occupied
-	program.code_base_rva         = i32(text_section_header.VirtualAddress)
-	
-	for function in &program.functions
-	{
-		if &function == program.entry_point
-		{
-			optional_header.AddressOfEntryPoint = file_offset_to_rva(&exe_buffer, text_section_header)
-		}
-		fn_encode(&exe_buffer, &function)
-	}
-	
+	copy(buffer_allocate_size(&exe_buffer, text_section_buffer.occupied), text_section_buffer.memory[:text_section_buffer.occupied])
 	exe_buffer.occupied = int(text_section_header.PointerToRawData + text_section_header.SizeOfRawData)
 	
 	////////
@@ -307,5 +355,6 @@ write_executable :: proc(program: ^Program)
 	win32.close_handle(file)
 	
 	free_buffer(&rdata_section_buffer)
+	free_buffer(&text_section_buffer)
 	free_buffer(&exe_buffer)
 }

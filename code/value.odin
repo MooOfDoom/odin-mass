@@ -264,7 +264,6 @@ Program :: struct
 	entry_point:           ^Function_Builder,
 	functions:             [dynamic]Function_Builder,
 	code_base_rva:         i32,
-	code_base_file_offset: int,
 }
 
 Jit_Program :: struct
@@ -391,16 +390,34 @@ fits_into_i8 :: proc(value: $T) -> bool
 	return value >= T(min(i8)) && value <= T(max(i8))
 }
 
+fits_into_u8 :: proc(value: $T) -> bool
+	where intrinsics.type_is_integer(T)
+{
+	return value >= T(min(u8)) && value <= T(max(u8))
+}
+
 fits_into_i16 :: proc(value: $T) -> bool
 	where intrinsics.type_is_integer(T)
 {
 	return value >= T(min(i16)) && value <= T(max(i16))
 }
 
+fits_into_u16 :: proc(value: $T) -> bool
+	where intrinsics.type_is_integer(T)
+{
+	return value >= T(min(u16)) && value <= T(max(u16))
+}
+
 fits_into_i32 :: proc(value: $T) -> bool
 	where intrinsics.type_is_integer(T)
 {
 	return value >= T(min(i32)) && value <= T(max(i32))
+}
+
+fits_into_u32 :: proc(value: $T) -> bool
+	where intrinsics.type_is_integer(T)
+{
+	return value >= T(min(u32)) && value <= T(max(u32))
 }
 
 imm_auto :: proc(value: $T) -> Operand

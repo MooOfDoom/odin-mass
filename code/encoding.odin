@@ -234,11 +234,9 @@ encode_instruction :: proc(buffer: ^Buffer, builder: ^Function_Builder, instruct
 				operand := &instruction.operands[operand_index]
 				if operand.type == .RIP_Relative_Import
 				{
-					program := builder.program
-					code_base_rva         := program.code_base_rva
-					code_base_file_offset := program.code_base_file_offset
-					next_instruction_rva  :=
-						i64(code_base_rva) + i64(buffer.occupied - code_base_file_offset) + size_of(i32)
+					program              := builder.program
+					code_base_rva        := program.code_base_rva
+					next_instruction_rva := i64(code_base_rva) + i64(buffer.occupied) + size_of(i32)
 					
 					lib_loop: for lib in &program.import_libraries
 					{
@@ -263,7 +261,7 @@ encode_instruction :: proc(buffer: ^Buffer, builder: ^Function_Builder, instruct
 				}
 				else if operand.type == .RIP_Relative
 				{
-					start_address := i64(uintptr(&buffer.memory[0]))
+					start_address            := i64(uintptr(&buffer.memory[0]))
 					next_instruction_address := start_address + i64(buffer.occupied) + size_of(i32)
 					
 					diff := operand.imm64 - next_instruction_address
