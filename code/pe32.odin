@@ -9,11 +9,118 @@ PE32_SECTION_ALIGNMENT :: 0x1000
 
 PE32_MIN_WINDOWS_VERSION_VISTA :: 6
 
-@(private="file")
-short_name :: proc(name: string) -> [IMAGE_SIZEOF_SHORT_NAME]byte
+EXPORT_DIRECTORY_INDEX       :: 0
+IMPORT_DIRECTORY_INDEX       :: 1
+RESOURCE_DIRECTORY_INDEX     :: 2
+EXCEPTION_DIRECTORY_INDEX    :: 3
+SECURITY_DIRECTORY_INDEX     :: 4
+RELOCATION_DIRECTORY_INDEX   :: 5
+DEBUG_DIRECTORY_INDEX        :: 6
+ARCHITECTURE_DIRECTORY_INDEX :: 7
+GLOBAL_PTR_DIRECTORY_INDEX   :: 8
+TLS_DIRECTORY_INDEX          :: 9
+LOAD_CONFIG_DIRECTORY_INDEX  :: 10
+BOUND_IMPORT_DIRECTORY_INDEX :: 11
+IAT_DIRECTORY_INDEX          :: 12
+DELAY_IMPORT_DIRECTORY_INDEX :: 13
+CLR_DIRECTORY_INDEX          :: 14
+
+Encoded_Rdata_Section :: struct
 {
-	result: [IMAGE_SIZEOF_SHORT_NAME]byte
-	copy(result[:], name)
+	buffer:                Buffer,
+	iat_rva:               u32,
+	iat_size:              u32,
+	import_directory_rva:  u32,
+	import_directory_size: u32,
+}
+
+encode_rdata_section :: proc(program: ^Program, header: ^IMAGE_SECTION_HEADER) -> Encoded_Rdata_Section
+{
+	get_rva :: proc(buffer: ^Buffer, header: ^IMAGE_SECTION_HEADER) -> u32
+	{
+		return u32(buffer.occupied) + header.VirtualAddress
+	}
+	
+	result: Encoded_Rdata_Section =
+	{
+		// FIXME dynamically resize the buffer
+		buffer = make_buffer(1024 * 1024, win32.PAGE_READWRITE),
+	}
+	
+	buffer := &result.buffer
+	
+	// Function Names
+	for lib in &program.import_libraries
+	{
+		for sym in &lib.symbols
+		{
+			sym.name_rva = get_rva(buffer, header)
+			buffer_append(buffer, u16(0)) // Ordinal Hint, value not required
+			
+			aligned_function_name_size := align(len(sym.name) + 1, 2)
+			copy(buffer_allocate_size(buffer, aligned_function_name_size), sym.name)
+		}
+	}
+	
+	// IAT
+	
+	result.iat_rva = get_rva(buffer, header)
+	for lib in &program.import_libraries
+	{
+		lib.dll.iat_rva = get_rva(buffer, header)
+		for sym in &lib.symbols
+		{
+			sym.iat_rva = get_rva(buffer, header)
+			buffer_append(buffer, u64(sym.name_rva))
+		}
+		// End of IAT list
+		buffer_append(buffer, u64(0))
+	}
+	result.iat_size = get_rva(buffer, header) - result.iat_rva
+	
+	// Image thunks
+	for lib in &program.import_libraries
+	{
+		lib.image_thunk_rva = get_rva(buffer, header)
+		for sym in &lib.symbols
+		{
+			buffer_append(buffer, u64(sym.name_rva))
+		}
+		// End of image thunk list
+		buffer_append(buffer, u64(0))
+	}
+	
+	// Library Names
+	for lib in &program.import_libraries
+	{
+		lib.dll.name_rva = get_rva(buffer, header)
+		{
+			aligned_name_size := align(len(lib.dll.name) + 1, 2)
+			copy(buffer_allocate_size(buffer, aligned_name_size), lib.dll.name)
+		}
+	}
+	
+	// Import Directory
+	result.import_directory_rva = get_rva(buffer, header)
+	for lib in &program.import_libraries
+	{
+		image_import_descriptor := buffer_allocate(buffer, IMAGE_IMPORT_DESCRIPTOR)
+		image_import_descriptor^ =
+		{
+			OriginalFirstThunk = lib.image_thunk_rva,
+			Name               = lib.dll.name_rva,
+			FirstThunk         = lib.dll.iat_rva,
+		}
+	}
+	
+	// End of IMAGE_IMPORT_DESCRIPTOR list
+	_ = buffer_allocate(buffer, IMAGE_IMPORT_DESCRIPTOR)
+	
+	result.import_directory_size = get_rva(buffer, header) - result.import_directory_rva
+	
+	header.Misc.VirtualSize = u32(buffer.occupied)
+	header.SizeOfRawData = align(u32(buffer.occupied), PE32_FILE_ALIGNMENT)
+	
 	return result
 }
 
@@ -25,14 +132,21 @@ write_executable :: proc(program: ^Program)
 	assert(fits_into_i32(max_code_size))
 	max_code_size_u32 := u32(max_code_size)
 	
+	short_name :: proc(name: string) -> [IMAGE_SIZEOF_SHORT_NAME]byte
+	{
+		result: [IMAGE_SIZEOF_SHORT_NAME]byte
+		copy(result[:], name)
+		return result
+	}
+	
 	// Sections
 	sections := [?]IMAGE_SECTION_HEADER \
 	{
 		{
 			Name             = short_name(".rdata"),
-			Misc             = {VirtualSize = 0x64}, // FIXME size of data in bytes
+			Misc             = {},
 			VirtualAddress   = 0,
-			SizeOfRawData    = 0x200,                // FIXME calculate this
+			SizeOfRawData    = 0,
 			PointerToRawData = 0,
 			Characteristics  = IMAGE_SCN_CNT_INITIALIZED_DATA | IMAGE_SCN_MEM_READ,
 		},
@@ -57,13 +171,18 @@ write_executable :: proc(program: ^Program)
 	                             size_of(sections))
 	
 	file_size_of_headers = align(file_size_of_headers, PE32_FILE_ALIGNMENT)
+	virtual_size_of_headers := align(file_size_of_headers, PE32_SECTION_ALIGNMENT)
+	
+	rdata_section_header.VirtualAddress = virtual_size_of_headers
+	encoded_rdata_section := encode_rdata_section(program, rdata_section_header)
+	rdata_section_buffer  := encoded_rdata_section.buffer
 	
 	virtual_size_of_image: u32
 	
 	{
 		// Update offsets for sections
 		section_offset         := file_size_of_headers
-		virtual_section_offset := align(file_size_of_headers, PE32_SECTION_ALIGNMENT)
+		virtual_section_offset := virtual_size_of_headers
 		non_null_sections := sections[:len(sections) - 1]
 		for section in &non_null_sections
 		{
@@ -95,22 +214,6 @@ write_executable :: proc(program: ^Program)
 		SizeOfOptionalHeader = size_of(IMAGE_OPTIONAL_HEADER64),
 		Characteristics      = IMAGE_FILE_EXECUTABLE_IMAGE | IMAGE_FILE_LARGE_ADDRESS_AWARE,
 	})
-	
-	EXPORT_DIRECTORY_INDEX       :: 0
-	IMPORT_DIRECTORY_INDEX       :: 1
-	RESOURCE_DIRECTORY_INDEX     :: 2
-	EXCEPTION_DIRECTORY_INDEX    :: 3
-	SECURITY_DIRECTORY_INDEX     :: 4
-	RELOCATION_DIRECTORY_INDEX   :: 5
-	DEBUG_DIRECTORY_INDEX        :: 6
-	ARCHITECTURE_DIRECTORY_INDEX :: 7
-	GLOBAL_PTR_DIRECTORY_INDEX   :: 8
-	TLS_DIRECTORY_INDEX          :: 9
-	LOAD_CONFIG_DIRECTORY_INDEX  :: 10
-	BOUND_IMPORT_DIRECTORY_INDEX :: 11
-	IAT_DIRECTORY_INDEX          :: 12
-	DELAY_IMPORT_DIRECTORY_INDEX :: 13
-	CLR_DIRECTORY_INDEX          :: 14
 	
 	base_of_code: u32 = 0x2000 // FIXME use section alignment
 	address_of_entry_relative_to_base_of_code: u32 = 0
@@ -144,6 +247,10 @@ write_executable :: proc(program: ^Program)
 		NumberOfRvaAndSizes         = IMAGE_NUMBEROF_DIRECTORY_ENTRIES, // TODO think about shrinking this if possible
 		DataDirectory               = {},
 	}
+	optional_header.DataDirectory[IAT_DIRECTORY_INDEX].VirtualAddress    = encoded_rdata_section.iat_rva
+	optional_header.DataDirectory[IAT_DIRECTORY_INDEX].Size              = encoded_rdata_section.iat_size
+	optional_header.DataDirectory[IMPORT_DIRECTORY_INDEX].VirtualAddress = encoded_rdata_section.import_directory_rva
+	optional_header.DataDirectory[IMPORT_DIRECTORY_INDEX].Size           = encoded_rdata_section.import_directory_size
 	
 	// Write out sections
 	buffer_append(&exe_buffer, sections)
@@ -154,81 +261,8 @@ write_executable :: proc(program: ^Program)
 	}
 	
 	// .rdata segment
-	
 	exe_buffer.occupied = int(rdata_section_header.PointerToRawData)
-	
-	// Function Names
-	for lib in &program.import_libraries
-	{
-		for sym in &lib.symbols
-		{
-			sym.name_rva = file_offset_to_rva(&exe_buffer, rdata_section_header)
-			buffer_append(&exe_buffer, u16(0)) // Ordinal Hint, value not required
-			
-			aligned_function_name_size := align(len(sym.name) + 1, 2)
-			copy(buffer_allocate_size(&exe_buffer, aligned_function_name_size), sym.name)
-		}
-	}
-	
-	// IAT
-	
-	optional_header.DataDirectory[IAT_DIRECTORY_INDEX].VirtualAddress =
-		file_offset_to_rva(&exe_buffer, rdata_section_header)
-	for lib in &program.import_libraries
-	{
-		lib.dll.iat_rva = file_offset_to_rva(&exe_buffer, rdata_section_header)
-		for sym in &lib.symbols
-		{
-			sym.iat_rva = file_offset_to_rva(&exe_buffer, rdata_section_header)
-			buffer_append(&exe_buffer, u64(sym.name_rva))
-		}
-		// End of IAT list
-		buffer_append(&exe_buffer, u64(0))
-	}
-	optional_header.DataDirectory[IAT_DIRECTORY_INDEX].Size =
-		file_offset_to_rva(&exe_buffer, rdata_section_header) - optional_header.DataDirectory[IAT_DIRECTORY_INDEX].VirtualAddress
-	
-	// Image thunks
-	for lib in &program.import_libraries
-	{
-		lib.image_thunk_rva = file_offset_to_rva(&exe_buffer, rdata_section_header)
-		for sym in &lib.symbols
-		{
-			buffer_append(&exe_buffer, u64(sym.name_rva))
-		}
-		// End of image thunk list
-		buffer_append(&exe_buffer, u64(0))
-	}
-	
-	// Library Names
-	for lib in &program.import_libraries
-	{
-		lib.dll.name_rva = file_offset_to_rva(&exe_buffer, rdata_section_header)
-		{
-			aligned_name_size := align(len(lib.dll.name) + 1, 2)
-			copy(buffer_allocate_size(&exe_buffer, aligned_name_size), lib.dll.name)
-		}
-	}
-	
-	// Import Directory
-	optional_header.DataDirectory[IMPORT_DIRECTORY_INDEX].VirtualAddress =
-		file_offset_to_rva(&exe_buffer, rdata_section_header)
-	for lib in &program.import_libraries
-	{
-		image_import_descriptor := buffer_allocate(&exe_buffer, IMAGE_IMPORT_DESCRIPTOR)
-		image_import_descriptor^ =
-		{
-			OriginalFirstThunk = lib.image_thunk_rva,
-			Name               = lib.dll.name_rva,
-			FirstThunk         = lib.dll.iat_rva,
-		}
-	}
-	
-	// End of IMAGE_IMPORT_DESCRIPTOR list
-	_ = buffer_allocate(&exe_buffer, IMAGE_IMPORT_DESCRIPTOR)
-	
-	optional_header.DataDirectory[IMPORT_DIRECTORY_INDEX].Size =
-		file_offset_to_rva(&exe_buffer, rdata_section_header) - optional_header.DataDirectory[IMPORT_DIRECTORY_INDEX].VirtualAddress
+	copy(buffer_allocate_size(&exe_buffer, rdata_section_buffer.occupied), rdata_section_buffer.memory[:rdata_section_buffer.occupied])
 	
 	actual_size_of_rdata := u32(exe_buffer.occupied) - rdata_section_header.PointerToRawData
 	fmt.printf("%x\n", actual_size_of_rdata)
@@ -269,4 +303,9 @@ write_executable :: proc(program: ^Program)
 	                 i32(exe_buffer.occupied), // number of bytes to write
 	                 &bytes_written,           // number of bytes that were written
 	                 nil)
+	
+	win32.close_handle(file)
+	
+	free_buffer(&rdata_section_buffer)
+	free_buffer(&exe_buffer)
 }
