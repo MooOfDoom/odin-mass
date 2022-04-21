@@ -178,19 +178,6 @@ fn_encode :: proc(buffer: ^Buffer, builder: ^Function_Builder, loc := #caller_lo
 	delete(builder.instructions)
 }
 
-estimate_max_code_size_in_bytes :: proc(program: ^Program) -> int
-{
-	total_instruction_count: int
-	for builder in &program.functions
-	{
-		// NOTE(Lothar): @Volatile Plus 1 because fn_encode adds 15 bytes worth of instructions
-		total_instruction_count += len(builder.instructions) + 1 
-	}
-	// TODO this should be architecture-dependent
-	max_bytes_per_instruction :: 15
-	return total_instruction_count * max_bytes_per_instruction
-}
-
 program_end :: proc(program: ^Program, loc := #caller_location) -> Jit_Program
 {
 	code_buffer_size := estimate_max_code_size_in_bytes(program)
@@ -211,7 +198,7 @@ program_end :: proc(program: ^Program, loc := #caller_location) -> Jit_Program
 	{
 		fn_encode(&result.code_buffer, &builder, loc)
 	}
-	fmt.printf("\n!!!!!! reserved: %v, occupied: %v\n", code_buffer_size, result.code_buffer.occupied)
+	// fmt.printf("\n!!!!!! reserved: %v, occupied: %v\n", code_buffer_size, result.code_buffer.occupied)
 	
 	if DEBUG_PRINT do print_buffer(result.code_buffer.memory[:result.code_buffer.occupied])
 	
@@ -547,7 +534,7 @@ call_function_overload :: proc(builder: ^Function_Builder, to_call: ^Value, args
 		push_instruction(builder, {call, {reg_a.operand, {}, {}}, nil, #location()})
 	}
 	
-	if descriptor.returns.descriptor.type != .Void && return_size <= size_of(i64)
+	if return_size != 0 && return_size <= size_of(i64)
 	{
 		result := reserve_stack(builder, descriptor.returns.descriptor)
 		move_value(builder, result, descriptor.returns)

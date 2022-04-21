@@ -2,6 +2,12 @@ package main
 
 import "core:fmt"
 import "core:sys/win32"
+import "core:time"
+
+PE32_FILE_ALIGNMENT    :: 0x200
+PE32_SECTION_ALIGNMENT :: 0x1000
+
+PE32_MIN_WINDOWS_VERSION_VISTA :: 6
 
 @(private="file")
 short_name :: proc(name: string) -> [IMAGE_SIZEOF_SHORT_NAME]byte
@@ -13,6 +19,64 @@ short_name :: proc(name: string) -> [IMAGE_SIZEOF_SHORT_NAME]byte
 
 write_executable :: proc(program: ^Program)
 {
+	max_code_size := estimate_max_code_size_in_bytes(program)
+	max_code_size = align(max_code_size, PE32_FILE_ALIGNMENT)
+	
+	assert(fits_into_i32(max_code_size))
+	max_code_size_u32 := u32(max_code_size)
+	
+	// Sections
+	sections := [?]IMAGE_SECTION_HEADER \
+	{
+		{
+			Name             = short_name(".rdata"),
+			Misc             = {VirtualSize = 0x64}, // FIXME size of data in bytes
+			VirtualAddress   = 0,
+			SizeOfRawData    = 0x200,                // FIXME calculate this
+			PointerToRawData = 0,
+			Characteristics  = IMAGE_SCN_CNT_INITIALIZED_DATA | IMAGE_SCN_MEM_READ,
+		},
+		{
+			Name             = short_name(".text"),
+			Misc             = {VirtualSize = 0x10}, // FIXME size of machine code in bytes
+			VirtualAddress   = 0,
+			SizeOfRawData    = max_code_size_u32,
+			PointerToRawData = 0,
+			Characteristics  = IMAGE_SCN_CNT_INITIALIZED_DATA | IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_EXECUTE,
+		},
+		{},
+	}
+	
+	rdata_section_header := &sections[0]
+	text_section_header  := &sections[1]
+	
+	file_size_of_headers: u32 = (size_of(IMAGE_DOS_HEADER)        +
+	                             size_of(u32)                     + // IMAGE_NT_SIGNATURE
+	                             size_of(IMAGE_FILE_HEADER)       +
+	                             size_of(IMAGE_OPTIONAL_HEADER64) +
+	                             size_of(sections))
+	
+	file_size_of_headers = align(file_size_of_headers, PE32_FILE_ALIGNMENT)
+	
+	virtual_size_of_image: u32
+	
+	{
+		// Update offsets for sections
+		section_offset         := file_size_of_headers
+		virtual_section_offset := align(file_size_of_headers, PE32_SECTION_ALIGNMENT)
+		non_null_sections := sections[:len(sections) - 1]
+		for section in &non_null_sections
+		{
+			section.PointerToRawData = section_offset
+			section_offset += section.SizeOfRawData
+			
+			section.VirtualAddress = virtual_section_offset
+			virtual_section_offset += align(section.SizeOfRawData, PE32_SECTION_ALIGNMENT)
+		}
+		virtual_size_of_image = virtual_section_offset
+	}
+	
+	// TODO this should be dynamically sized or correctly estimated
 	exe_buffer := make_buffer(1024 * 1024, win32.PAGE_READWRITE)
 	
 	dos_header := buffer_allocate(&exe_buffer, IMAGE_DOS_HEADER)
@@ -26,8 +90,8 @@ write_executable :: proc(program: ^Program)
 	buffer_append(&exe_buffer, IMAGE_FILE_HEADER \
 	{
 		Machine              = IMAGE_FILE_MACHINE_AMD64,
-		NumberOfSections     = 2,
-		TimeDateStamp        = 0x5ef48e56, // FIXME generate ourselves
+		NumberOfSections     = u16(len(sections) - 1),
+		TimeDateStamp        = u32(time.time_to_unix(time.now())),
 		SizeOfOptionalHeader = size_of(IMAGE_OPTIONAL_HEADER64),
 		Characteristics      = IMAGE_FILE_EXECUTABLE_IMAGE | IMAGE_FILE_LARGE_ADDRESS_AWARE,
 	})
@@ -55,23 +119,22 @@ write_executable :: proc(program: ^Program)
 	optional_header^ =
 	{
 		Magic                       = IMAGE_NT_OPTIONAL_HDR64_MAGIC,
-		SizeOfCode                  = 0x200,  // FIXME calculate based on the amount of machine code
-		SizeOfInitializedData       = 0x200,  // FIXME calculate based on the amount of global data
-		SizeOfUninitializedData     = 0,      // FIXME figure out difference between initialized and uninitialized
-		AddressOfEntryPoint         = base_of_code + address_of_entry_relative_to_base_of_code,
-		BaseOfCode                  = base_of_code, // FIXME resolve to the right section containing code
+		SizeOfCode                  = text_section_header.SizeOfRawData,
+		SizeOfInitializedData       = rdata_section_header.SizeOfRawData,
+		AddressOfEntryPoint         = 0,
+		BaseOfCode                  = text_section_header.VirtualAddress,
 		ImageBase                   = 0x0000000140000000, // Does not matter as we are using dynamic base
-		SectionAlignment            = 0x1000,
-		FileAlignment               = 0x200,
-		MajorOperatingSystemVersion = 6,      // FIXME figure out if can be not hard coded
+		SectionAlignment            = PE32_SECTION_ALIGNMENT,
+		FileAlignment               = PE32_FILE_ALIGNMENT,
+		MajorOperatingSystemVersion = PE32_MIN_WINDOWS_VERSION_VISTA,
 		MinorOperatingSystemVersion = 0,
-		MajorSubsystemVersion       = 6,      // FIXME figure out if can be not hard coded
+		MajorSubsystemVersion       = PE32_MIN_WINDOWS_VERSION_VISTA,
 		MinorSubsystemVersion       = 0,
-		SizeOfImage                 = 0x3000, // FIXME calculate based on the sizes of the sections
-		SizeOfHeaders               = 0,
+		SizeOfImage                 = virtual_size_of_image,
+		SizeOfHeaders               = file_size_of_headers,
 		Subsystem                   = IMAGE_SUBSYSTEM_WINDOWS_CUI, // TODO allow user to specify this
 		DllCharacteristics          = (IMAGE_DLLCHARACTERISTICS_HIGH_ENTROPY_VA |
-		                               IMAGE_DLLCHARACTERISTICS_NX_COMPAT       | // TODO figure out what NX is
+		                               IMAGE_DLLCHARACTERISTICS_NX_COMPAT       |
 		                               IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE    |
 		                               IMAGE_DLLCHARACTERISTICS_TERMINAL_SERVER_AWARE),
 		SizeOfStackReserve          = 0x100000,
@@ -82,48 +145,8 @@ write_executable :: proc(program: ^Program)
 		DataDirectory               = {},
 	}
 	
-	// .rdata section
-	rdata_section_header := buffer_allocate(&exe_buffer, IMAGE_SECTION_HEADER)
-	rdata_section_header^ =
-	{
-		Name             = short_name(".rdata"),
-		Misc             = {VirtualSize = 0x14c}, // FIXME size of machine code in bytes
-		VirtualAddress   = 0x1000,                // FIXME calculate this
-		SizeOfRawData    = 0x200,                 // FIXME calculate this
-		PointerToRawData = 0,
-		Characteristics  = IMAGE_SCN_CNT_INITIALIZED_DATA | IMAGE_SCN_MEM_READ,
-	}
-	
-	// .text section
-	text_section_header := buffer_allocate(&exe_buffer, IMAGE_SECTION_HEADER)
-	text_section_header^ =
-	{
-		Name             = short_name(".text"),
-		Misc             = {VirtualSize = 0x10}, // FIXME size of machine code in bytes
-		VirtualAddress   = optional_header.BaseOfCode,
-		SizeOfRawData    = optional_header.SizeOfCode,
-		PointerToRawData = 0,
-		Characteristics  = IMAGE_SCN_CNT_INITIALIZED_DATA | IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_EXECUTE,
-	}
-	
-	// NULL header telling that the list is done
-	_ = buffer_allocate(&exe_buffer, IMAGE_SECTION_HEADER)
-	
-	optional_header.SizeOfHeaders = u32(align(i32(exe_buffer.occupied), i32(optional_header.FileAlignment)))
-	
-	sections := [?]^IMAGE_SECTION_HEADER \
-	{
-		rdata_section_header,
-		text_section_header,
-	}
-	section_offset := optional_header.SizeOfHeaders
-	for section in sections
-	{
-		section.PointerToRawData = section_offset
-		section_offset += section.SizeOfRawData
-	}
-	assert(rdata_section_header.PointerToRawData == 0x200)
-	assert(text_section_header.PointerToRawData == 0x400)
+	// Write out sections
+	buffer_append(&exe_buffer, sections)
 	
 	file_offset_to_rva :: proc(buffer: ^Buffer, section_header: ^IMAGE_SECTION_HEADER) -> u32
 	{
@@ -140,14 +163,17 @@ write_executable :: proc(program: ^Program)
 		for sym in &lib.symbols
 		{
 			sym.name_rva = file_offset_to_rva(&exe_buffer, rdata_section_header)
-			buffer_append(&exe_buffer, u16(0))
+			buffer_append(&exe_buffer, u16(0)) // Ordinal Hint, value not required
 			
-			aligned_function_name_size := align(i32(len(sym.name) + 1), 2)
-			copy(buffer_allocate_size(&exe_buffer, int(aligned_function_name_size)), sym.name)
+			aligned_function_name_size := align(len(sym.name) + 1, 2)
+			copy(buffer_allocate_size(&exe_buffer, aligned_function_name_size), sym.name)
 		}
 	}
 	
 	// IAT
+	
+	optional_header.DataDirectory[IAT_DIRECTORY_INDEX].VirtualAddress =
+		file_offset_to_rva(&exe_buffer, rdata_section_header)
 	for lib in &program.import_libraries
 	{
 		lib.dll.iat_rva = file_offset_to_rva(&exe_buffer, rdata_section_header)
@@ -159,12 +185,8 @@ write_executable :: proc(program: ^Program)
 		// End of IAT list
 		buffer_append(&exe_buffer, u64(0))
 	}
-	
-	optional_header.DataDirectory[IAT_DIRECTORY_INDEX] =
-	{
-		VirtualAddress = program.import_libraries[0].dll.iat_rva,
-		Size           = file_offset_to_rva(&exe_buffer, rdata_section_header) - program.import_libraries[0].dll.iat_rva,
-	}
+	optional_header.DataDirectory[IAT_DIRECTORY_INDEX].Size =
+		file_offset_to_rva(&exe_buffer, rdata_section_header) - optional_header.DataDirectory[IAT_DIRECTORY_INDEX].VirtualAddress
 	
 	// Image thunks
 	for lib in &program.import_libraries
@@ -183,13 +205,14 @@ write_executable :: proc(program: ^Program)
 	{
 		lib.dll.name_rva = file_offset_to_rva(&exe_buffer, rdata_section_header)
 		{
-			aligned_name_size := align(i32(len(lib.dll.name) + 1), 2)
-			copy(buffer_allocate_size(&exe_buffer, int(aligned_name_size)), lib.dll.name)
+			aligned_name_size := align(len(lib.dll.name) + 1, 2)
+			copy(buffer_allocate_size(&exe_buffer, aligned_name_size), lib.dll.name)
 		}
 	}
 	
 	// Import Directory
-	import_directory_rva := file_offset_to_rva(&exe_buffer, rdata_section_header)
+	optional_header.DataDirectory[IMPORT_DIRECTORY_INDEX].VirtualAddress =
+		file_offset_to_rva(&exe_buffer, rdata_section_header)
 	for lib in &program.import_libraries
 	{
 		image_import_descriptor := buffer_allocate(&exe_buffer, IMAGE_IMPORT_DESCRIPTOR)
@@ -204,47 +227,27 @@ write_executable :: proc(program: ^Program)
 	// End of IMAGE_IMPORT_DESCRIPTOR list
 	_ = buffer_allocate(&exe_buffer, IMAGE_IMPORT_DESCRIPTOR)
 	
-	optional_header.DataDirectory[IMPORT_DIRECTORY_INDEX] =
-	{
-		VirtualAddress = import_directory_rva,
-		Size           = file_offset_to_rva(&exe_buffer, rdata_section_header) - import_directory_rva,
-	}
+	optional_header.DataDirectory[IMPORT_DIRECTORY_INDEX].Size =
+		file_offset_to_rva(&exe_buffer, rdata_section_header) - optional_header.DataDirectory[IMPORT_DIRECTORY_INDEX].VirtualAddress
+	
+	actual_size_of_rdata := u32(exe_buffer.occupied) - rdata_section_header.PointerToRawData
+	fmt.printf("%x\n", actual_size_of_rdata)
+	assert(actual_size_of_rdata == rdata_section_header.Misc.VirtualSize, "rdata declared size does not match actual size")
 	
 	// .text segment
 	exe_buffer.occupied = int(text_section_header.PointerToRawData)
 	
 	program.code_base_file_offset = exe_buffer.occupied
 	program.code_base_rva         = i32(text_section_header.VirtualAddress)
-	fn_encode(&exe_buffer, program.entry_point)
 	
-	// buffer_append(&exe_buffer, [?]byte \
-	// {
-	// 	0x48, 0x83, 0xec, 0x28,         // sub rsp, 0x28
-	// 	0xb9, 0x2a, 0x00, 0x00, 0x00,   // mov ecx, 0x2a
-	// })
-	
-	// buffer_append_u8(&exe_buffer, 0xff) // call
-	// buffer_append_u8(&exe_buffer, 0x15)
-	// {
-	// 	ExitProcess_rip_relative_address := buffer_allocate(&exe_buffer, i32)
-	// 	ExitProcess_call_rva             := file_offset_to_rva(&exe_buffer, text_section_header)
-		
-	// 	lib_loop: for lib in &program.import_libraries
-	// 	{
-	// 		if lib.dll.name != "kernel32.dll" do continue
-			
-	// 		for sym in &lib.symbols
-	// 		{
-	// 			if sym.name == "ExitProcess"
-	// 			{
-	// 				ExitProcess_rip_relative_address^ = i32(sym.iat_rva - ExitProcess_call_rva)
-	// 				break lib_loop
-	// 			}
-	// 		}
-	// 		assert(false, "ExitProcess was not in the kernel32.dll imports")
-	// 	}
-	// }
-	// buffer_append_u8(&exe_buffer, 0xcc) // int 3
+	for function in &program.functions
+	{
+		if &function == program.entry_point
+		{
+			optional_header.AddressOfEntryPoint = file_offset_to_rva(&exe_buffer, text_section_header)
+		}
+		fn_encode(&exe_buffer, &function)
+	}
 	
 	exe_buffer.occupied = int(text_section_header.PointerToRawData + text_section_header.SizeOfRawData)
 	

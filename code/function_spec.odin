@@ -64,14 +64,20 @@ function_spec :: proc()
 	
 	it("should write out an executable", proc()
 	{
-		program := new(Program)
+		program := &test_program
 		
 		ExitProcess_value := odin_function_import(program, "kernel32.dll", `ExitProcess :: proc "std" (i32)`)
 		
-		checker_value, f := Function(program)
+		my_exit, e := Function()
+		{
+			Call(ExitProcess_value, value_from_i32(42))
+		}
+		End_Function()
+		
+		main, f := Function()
 		{
 			program.entry_point = f
-			Return(Call(ExitProcess_value, value_from_i32(42)))
+			Call(my_exit)
 		}
 		End_Function()
 		

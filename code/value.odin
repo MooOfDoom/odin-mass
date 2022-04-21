@@ -900,3 +900,16 @@ program_find_import :: proc(program: ^Program, library_name: string, symbol_name
 	}
 	return nil
 }
+
+estimate_max_code_size_in_bytes :: proc(program: ^Program) -> int
+{
+	total_instruction_count: int
+	for builder in &program.functions
+	{
+		// NOTE(Lothar): @Volatile Plus 1 because fn_encode adds 15 bytes worth of instructions
+		total_instruction_count += len(builder.instructions) + 1 
+	}
+	// TODO this should be architecture-dependent
+	max_bytes_per_instruction :: 15
+	return total_instruction_count * max_bytes_per_instruction
+}

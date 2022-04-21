@@ -4,7 +4,7 @@ import "core:fmt"
 import "core:mem"
 import "core:sys/win32"
 
-DEBUG_PRINT :: true
+DEBUG_PRINT :: false
 
 fn_reflect :: proc(builder: ^Function_Builder, descriptor: ^Descriptor) -> ^Value
 {

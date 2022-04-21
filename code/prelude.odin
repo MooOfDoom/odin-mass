@@ -1,6 +1,7 @@
 package main
 
 import "core:fmt"
+import "core:intrinsics"
 import "core:mem"
 import "core:runtime"
 import "core:strings"
@@ -25,7 +26,8 @@ fn_i64_i64_i64_i64_i64_i64_to_i64 :: #type proc "c" (i64, i64, i64, i64, i64, i6
 fn_rawptr_to_i32                  :: #type proc "c" (rawptr) -> i32
 fn_rawptr_i64_to_i64              :: #type proc "c" (rawptr, i64) -> i64
 
-align :: proc(number: i32, alignment: i32) -> i32
+align :: proc(number: $T, alignment: T) -> T
+	where intrinsics.type_is_integer(T)
 {
 	return ((number + alignment - 1) / alignment) * alignment
 }
