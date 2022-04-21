@@ -215,9 +215,7 @@ write_executable :: proc(program: ^Program)
 	
 	program.code_base_file_offset = exe_buffer.occupied
 	program.code_base_rva         = i32(text_section_header.VirtualAddress)
-	program.entry_point.buffer    = &exe_buffer
-	fn_end(program.entry_point)
-	program_end(program)
+	fn_encode(&exe_buffer, program.entry_point)
 	
 	// buffer_append(&exe_buffer, [?]byte \
 	// {

@@ -18,11 +18,9 @@ REX_R :u8: 0b01000100 // Extension of the ModR/M reg field
 REX_X :u8: 0b01000010 // Extension of the SIB index field
 REX_B :u8: 0b01000001 // Extension of the ModR/M r/m field, SIB base field, or Opcode reg field
 
-encode_instruction :: proc(builder: ^Function_Builder, instruction: Instruction)
+encode_instruction :: proc(buffer: ^Buffer, builder: ^Function_Builder, instruction: Instruction)
 {
 	instruction := instruction
-	
-	buffer := builder.buffer
 	
 	if instruction.maybe_label != nil
 	{
@@ -251,7 +249,7 @@ encode_instruction :: proc(builder: ^Function_Builder, instruction: Instruction)
 							if sym.name == operand.import_.symbol_name
 							{
 								diff := i64(sym.iat_rva) - next_instruction_rva
-								assert(diff >= i64(min(i32)) && diff <= i64(max(i32)), "RIP relative import address too distant")
+								assert(fits_into_i32(diff), "RIP relative import address too distant")
 								displacement := i32(diff)
 								
 								buffer_append(buffer, displacement)
@@ -269,7 +267,7 @@ encode_instruction :: proc(builder: ^Function_Builder, instruction: Instruction)
 					next_instruction_address := start_address + i64(buffer.occupied) + size_of(i32)
 					
 					diff := operand.imm64 - next_instruction_address
-					assert(diff >= i64(min(i32)) && diff <= i64(max(i32)), "RIP relative address too distant")
+					assert(fits_into_i32(diff), "RIP relative address too distant")
 					displacement := i32(diff)
 					
 					buffer_append(buffer, displacement)

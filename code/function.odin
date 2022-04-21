@@ -3,6 +3,7 @@ package main
 import "core:fmt"
 import "core:mem"
 import "core:runtime"
+import "core:sys/win32"
 
 TO_BE_PATCHED     :i32: -858993460 // 0xcccccccc
 TO_BE_PATCHED_i64 :i64: -3689348814741910324 // 0xcccccccccccccccc
@@ -102,11 +103,9 @@ move_value :: proc(builder: ^Function_Builder, a: ^Value, b: ^Value, loc := #cal
 
 fn_begin :: proc(program: ^Program) -> (result: ^Value, builder: ^Function_Builder)
 {
-	buffer := &program.function_buffer
 	append(&program.functions, Function_Builder \
 	{
 		program      = program,
-		buffer       = buffer,
 		instructions = make([dynamic]Instruction, 0, 32, runtime.default_allocator()),
 		prolog_label = make_label(),
 		epilog_label = make_label(),
@@ -156,41 +155,67 @@ fn_end :: proc(builder: ^Function_Builder, loc := #caller_location)
 	builder.stack_reserve += builder.max_call_parameters_stack_size
 	builder.stack_reserve = align(builder.stack_reserve, 16) + alignment
 	
-	// fn_encode(builder, loc)
-	
 	fn_freeze(builder)
 }
 
-fn_encode :: proc(builder: ^Function_Builder, loc := #caller_location)
+fn_encode :: proc(buffer: ^Buffer, builder: ^Function_Builder, loc := #caller_location)
 {
-	code_offset := builder.buffer.occupied
-	
-	encode_instruction(builder, {maybe_label = builder.prolog_label, loc = loc})
-	encode_instruction(builder, {sub, {rsp, imm_auto(builder.stack_reserve), {}}, nil, loc});
+	encode_instruction(buffer, builder, {maybe_label = builder.prolog_label, loc = loc})
+	encode_instruction(buffer, builder, {sub, {rsp, imm_auto(builder.stack_reserve), {}}, nil, loc});
 	
 	for instruction, i in &builder.instructions
 	{
-		encode_instruction(builder, instruction)
+		encode_instruction(buffer, builder, instruction)
 	}
 	
-	encode_instruction(builder, {maybe_label = builder.epilog_label, loc = loc})
+	encode_instruction(buffer, builder, {maybe_label = builder.epilog_label, loc = loc})
 	
-	encode_instruction(builder, {add, {rsp, imm_auto(builder.stack_reserve), {}}, nil, loc})
-	encode_instruction(builder, {ret, {}, nil, loc})
+	encode_instruction(buffer, builder, {add, {rsp, imm_auto(builder.stack_reserve), {}}, nil, loc})
+	encode_instruction(buffer, builder, {ret, {}, nil, loc})
 	// FIXME add encoding
-	// buffer_append_u8(builder.buffer, 0xcc) // int3
-	
-	if DEBUG_PRINT do print_buffer(builder.buffer.memory[code_offset:builder.buffer.occupied])
+	// buffer_append_u8(buffer, 0xcc) // int3
 	
 	delete(builder.instructions)
 }
 
-program_end :: proc(program: ^Program, loc := #caller_location)
+estimate_max_code_size_in_bytes :: proc(program: ^Program) -> int
 {
+	total_instruction_count: int
 	for builder in &program.functions
 	{
-		fn_encode(&builder, loc)
+		// NOTE(Lothar): @Volatile Plus 1 because fn_encode adds 15 bytes worth of instructions
+		total_instruction_count += len(builder.instructions) + 1 
 	}
+	// TODO this should be architecture-dependent
+	max_bytes_per_instruction :: 15
+	return total_instruction_count * max_bytes_per_instruction
+}
+
+program_end :: proc(program: ^Program, loc := #caller_location) -> Jit_Program
+{
+	code_buffer_size := estimate_max_code_size_in_bytes(program)
+	result: Jit_Program =
+	{
+		code_buffer = make_buffer(code_buffer_size, win32.PAGE_EXECUTE_READWRITE),
+		data_buffer = program.data_buffer,
+	}
+	if code_buffer_size == 0
+	{
+		fmt.println(result.code_buffer)
+	}
+	diff := i64(uintptr(&result.code_buffer.memory[0]) - uintptr(&result.data_buffer.memory[0]))
+	assert(fits_into_i32(diff), "Code and data buffers too far apart")
+	program.code_base_rva = i32(diff)
+	
+	for builder in &program.functions
+	{
+		fn_encode(&result.code_buffer, &builder, loc)
+	}
+	fmt.printf("\n!!!!!! reserved: %v, occupied: %v\n", code_buffer_size, result.code_buffer.occupied)
+	
+	if DEBUG_PRINT do print_buffer(result.code_buffer.memory[:result.code_buffer.occupied])
+	
+	return result
 }
 
 fn_arg :: proc(builder: ^Function_Builder, descriptor: ^Descriptor) -> ^Value

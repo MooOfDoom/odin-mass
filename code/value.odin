@@ -1,5 +1,6 @@
 package main
 
+import "core:intrinsics"
 import "core:fmt"
 import "core:strings"
 
@@ -246,8 +247,6 @@ Function_Builder :: struct
 	stack_reserve: i32,
 	max_call_parameters_stack_size: i32,
 	
-	buffer: ^Buffer,
-	
 	prolog_label: ^Label,
 	epilog_label: ^Label,
 	
@@ -261,12 +260,17 @@ Function_Builder :: struct
 Program :: struct
 {
 	data_buffer:           Buffer,
-	function_buffer:       Buffer,
 	import_libraries:      [dynamic]Import_Library,
 	entry_point:           ^Function_Builder,
 	functions:             [dynamic]Function_Builder,
 	code_base_rva:         i32,
 	code_base_file_offset: int,
+}
+
+Jit_Program :: struct
+{
+	code_buffer: Buffer,
+	data_buffer: Buffer,
 }
 
 // AL, AX, EAX, RAX
@@ -381,32 +385,36 @@ imm64 :: proc
 	imm64_rawptr,
 }
 
-imm_auto_i32 :: proc(value: i32) -> Operand
+fits_into_i8 :: proc(value: $T) -> bool
+	where intrinsics.type_is_integer(T)
 {
-	if value >= i32(min(i8)) && value <= i32(max(i8))
-	{
-		return imm8(i8(value))
-	}
-	return imm32(value)
+	return value >= T(min(i8)) && value <= T(max(i8))
 }
 
-imm_auto_i64 :: proc(value: i64) -> Operand
+fits_into_i16 :: proc(value: $T) -> bool
+	where intrinsics.type_is_integer(T)
 {
-	if value >= i64(min(i8)) && value <= i64(max(i8))
+	return value >= T(min(i16)) && value <= T(max(i16))
+}
+
+fits_into_i32 :: proc(value: $T) -> bool
+	where intrinsics.type_is_integer(T)
+{
+	return value >= T(min(i32)) && value <= T(max(i32))
+}
+
+imm_auto :: proc(value: $T) -> Operand
+	where intrinsics.type_is_integer(T)
+{
+	if fits_into_i8(value)
 	{
 		return imm8(i8(value))
 	}
-	if value >= i64(min(i32)) && value <= i64(max(i32))
+	if fits_into_i32(value)
 	{
 		return imm32(i32(value))
 	}
-	return imm64(value)
-}
-
-imm_auto :: proc
-{
-	imm_auto_i32,
-	imm_auto_i64,
+	return imm64(i64(value))
 }
 
 stack :: proc(offset: i32, byte_size: i32) -> Operand

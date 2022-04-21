@@ -47,13 +47,9 @@ function_spec :: proc()
 		test_program =
 		{
 			data_buffer      = make_buffer(128 * 1024, win32.PAGE_READWRITE),
-			function_buffer  = make_buffer(128 * 1024, win32.PAGE_EXECUTE_READWRITE),
 			import_libraries = make([dynamic]Import_Library, 0, 16),
 			functions        = make([dynamic]Function_Builder, 0, 16),
 		}
-		// FIXME make sure that this fits into i32
-		test_program.code_base_rva =
-			i32(uintptr(&test_program.function_buffer.memory[0]) - uintptr(&test_program.data_buffer.memory[0]))
 		
 		// NOTE(Lothar): Need to clear the fn_context so that its dynamic arrays don't continue to point
 		// into the freed temp buffer
@@ -63,7 +59,6 @@ function_spec :: proc()
 	
 	after_each(proc()
 	{
-		free_buffer(&test_program.function_buffer)
 		free_buffer(&test_program.data_buffer)
 	})
 	
@@ -78,6 +73,7 @@ function_spec :: proc()
 			program.entry_point = f
 			Return(Call(ExitProcess_value, value_from_i32(42)))
 		}
+		End_Function()
 		
 		write_executable(program)
 	})
