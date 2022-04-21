@@ -7,7 +7,7 @@ import "core:runtime"
 TO_BE_PATCHED     :i32: -858993460 // 0xcccccccc
 TO_BE_PATCHED_i64 :i64: -3689348814741910324 // 0xcccccccccccccccc
 
-reserve_stack :: proc(builder: ^Fn_Builder, descriptor: ^Descriptor) -> ^Value
+reserve_stack :: proc(builder: ^Function_Builder, descriptor: ^Descriptor) -> ^Value
 {
 	byte_size := descriptor_byte_size(descriptor)
 	builder.stack_reserve += byte_size
@@ -20,7 +20,7 @@ reserve_stack :: proc(builder: ^Fn_Builder, descriptor: ^Descriptor) -> ^Value
 	return result
 }
 
-push_instruction :: proc(builder: ^Fn_Builder, instruction: Instruction)
+push_instruction :: proc(builder: ^Function_Builder, instruction: Instruction)
 {
 	append(&builder.instructions, instruction)
 }
@@ -31,7 +31,7 @@ is_memory_operand :: proc(operand: ^Operand) -> bool
 	        operand.type == .RIP_Relative)
 }
 
-move_value :: proc(builder: ^Fn_Builder, a: ^Value, b: ^Value, loc := #caller_location)
+move_value :: proc(builder: ^Function_Builder, a: ^Value, b: ^Value, loc := #caller_location)
 {
 	// TODO figure out more type checking
 	a_size := descriptor_byte_size(a.descriptor)
@@ -100,14 +100,15 @@ move_value :: proc(builder: ^Fn_Builder, a: ^Value, b: ^Value, loc := #caller_lo
 	}
 }
 
-fn_begin :: proc(program: ^Program) -> (result: ^Value, builder: Fn_Builder)
+fn_begin :: proc(program: ^Program) -> (result: ^Value, builder: ^Function_Builder)
 {
-	builder =
+	buffer := &program.function_buffer
+	append(&program.functions, Function_Builder \
 	{
 		program      = program,
-		buffer       = &program.function_buffer,
-		code_offset  = program.function_buffer.occupied,
+		buffer       = buffer,
 		instructions = make([dynamic]Instruction, 0, 32, runtime.default_allocator()),
+		prolog_label = make_label(),
 		epilog_label = make_label(),
 		result       = new_clone(Value \
 		{
@@ -119,12 +120,12 @@ fn_begin :: proc(program: ^Program) -> (result: ^Value, builder: Fn_Builder)
 					arguments = make([dynamic]Value, 0, 16),
 				}},
 			}),
-			operand = label32(make_label(program.function_buffer.memory != nil ? \
-			                             &program.function_buffer.memory[program.function_buffer.occupied] :
-			                             nil)),
 		}),
-	}
+	})
+	builder = &program.functions[len(program.functions) - 1]
 	result = builder.result
+	result.operand = label32(builder.prolog_label)
+	
 	return result, builder
 }
 
@@ -139,22 +140,32 @@ fn_ensure_frozen :: proc(function: ^Descriptor_Function)
 	function.frozen = true
 }
 
-fn_freeze :: proc(builder: ^Fn_Builder)
+fn_freeze :: proc(builder: ^Function_Builder)
 {
 	fn_ensure_frozen(&builder.result.descriptor.function)
 }
 
-fn_is_frozen :: proc(builder: ^Fn_Builder) -> bool
+fn_is_frozen :: proc(builder: ^Function_Builder) -> bool
 {
 	return builder.result.descriptor.function.frozen
 }
 
-fn_end :: proc(builder: ^Fn_Builder, loc := #caller_location)
+fn_end :: proc(builder: ^Function_Builder, loc := #caller_location)
 {
 	alignment :: 0x8
 	builder.stack_reserve += builder.max_call_parameters_stack_size
 	builder.stack_reserve = align(builder.stack_reserve, 16) + alignment
 	
+	// fn_encode(builder, loc)
+	
+	fn_freeze(builder)
+}
+
+fn_encode :: proc(builder: ^Function_Builder, loc := #caller_location)
+{
+	code_offset := builder.buffer.occupied
+	
+	encode_instruction(builder, {maybe_label = builder.prolog_label, loc = loc})
 	encode_instruction(builder, {sub, {rsp, imm_auto(builder.stack_reserve), {}}, nil, loc});
 	
 	for instruction, i in &builder.instructions
@@ -162,21 +173,27 @@ fn_end :: proc(builder: ^Fn_Builder, loc := #caller_location)
 		encode_instruction(builder, instruction)
 	}
 	
-	encode_instruction(builder, {maybe_label = builder.epilog_label})
+	encode_instruction(builder, {maybe_label = builder.epilog_label, loc = loc})
 	
 	encode_instruction(builder, {add, {rsp, imm_auto(builder.stack_reserve), {}}, nil, loc})
 	encode_instruction(builder, {ret, {}, nil, loc})
 	// FIXME add encoding
 	// buffer_append_u8(builder.buffer, 0xcc) // int3
 	
-	if DEBUG_PRINT do print_buffer(builder.buffer.memory[builder.code_offset:builder.buffer.occupied])
-	
-	fn_freeze(builder)
+	if DEBUG_PRINT do print_buffer(builder.buffer.memory[code_offset:builder.buffer.occupied])
 	
 	delete(builder.instructions)
 }
 
-fn_arg :: proc(builder: ^Fn_Builder, descriptor: ^Descriptor) -> ^Value
+program_end :: proc(program: ^Program, loc := #caller_location)
+{
+	for builder in &program.functions
+	{
+		fn_encode(&builder, loc)
+	}
+}
+
+fn_arg :: proc(builder: ^Function_Builder, descriptor: ^Descriptor) -> ^Value
 {
 	byte_size := descriptor_byte_size(descriptor)
 	assert(byte_size <= 8, "Arg byte size <= 8")
@@ -215,7 +232,7 @@ fn_arg :: proc(builder: ^Fn_Builder, descriptor: ^Descriptor) -> ^Value
 	return &builder.result.descriptor.function.arguments[argument_index] // NOTE(Lothar): Danger! Pointing into dynamic array!
 }
 
-fn_return :: proc(builder: ^Fn_Builder, to_return: ^Value, loc := #caller_location)
+fn_return :: proc(builder: ^Function_Builder, to_return: ^Value, loc := #caller_location)
 {
 	// We can no longer modify the return value after fn has been called
 	// or after builder has been committed through fn_end() call
@@ -262,7 +279,7 @@ Arithmetic_Operation :: enum
 	Minus,
 }
 
-plus_or_minus :: proc(builder: ^Fn_Builder, operation: Arithmetic_Operation, a: ^Value, b: ^Value, loc := #caller_location) -> ^Value
+plus_or_minus :: proc(builder: ^Function_Builder, operation: Arithmetic_Operation, a: ^Value, b: ^Value, loc := #caller_location) -> ^Value
 {
 	if !(a.descriptor.type == .Pointer &&
 	     b.descriptor.type == .Integer &&
@@ -304,17 +321,17 @@ plus_or_minus :: proc(builder: ^Fn_Builder, operation: Arithmetic_Operation, a: 
 	return temp
 }
 
-plus :: proc(builder: ^Fn_Builder, a: ^Value, b: ^Value, loc := #caller_location) -> ^Value
+plus :: proc(builder: ^Function_Builder, a: ^Value, b: ^Value, loc := #caller_location) -> ^Value
 {
 	return plus_or_minus(builder, .Plus, a, b, loc)
 }
 
-minus :: proc(builder: ^Fn_Builder, a: ^Value, b: ^Value, loc := #caller_location) -> ^Value
+minus :: proc(builder: ^Function_Builder, a: ^Value, b: ^Value, loc := #caller_location) -> ^Value
 {
 	return plus_or_minus(builder, .Minus, a, b, loc)
 }
 
-multiply :: proc(builder: ^Fn_Builder, x: ^Value, y: ^Value, loc := #caller_location) -> ^Value
+multiply :: proc(builder: ^Function_Builder, x: ^Value, y: ^Value, loc := #caller_location) -> ^Value
 {
 	assert(same_value_type(x, y), "Types match in multiply")
 	assert(x.descriptor.type == .Integer, "Multiply only works with integers")
@@ -344,7 +361,7 @@ multiply :: proc(builder: ^Fn_Builder, x: ^Value, y: ^Value, loc := #caller_loca
 	return temp
 }
 
-divide :: proc(builder: ^Fn_Builder, a: ^Value, b: ^Value, loc := #caller_location) -> ^Value
+divide :: proc(builder: ^Function_Builder, a: ^Value, b: ^Value, loc := #caller_location) -> ^Value
 {
 	assert(same_value_type(a, b), "Types match in divide")
 	assert(a.descriptor.type == .Integer, "Divide only works with integers")
@@ -405,7 +422,7 @@ Compare :: enum
 	Greater,
 }
 
-compare :: proc(builder: ^Fn_Builder, operation: Compare, a: ^Value, b: ^Value, loc := #caller_location) -> ^Value
+compare :: proc(builder: ^Function_Builder, operation: Compare, a: ^Value, b: ^Value, loc := #caller_location) -> ^Value
 {
 	assert(same_value_type(a, b), "Types match in compare")
 	
@@ -446,7 +463,7 @@ compare :: proc(builder: ^Fn_Builder, operation: Compare, a: ^Value, b: ^Value, 
 	return result
 }
 
-value_pointer_to :: proc(builder: ^Fn_Builder, value: ^Value, loc := #caller_location) -> ^Value
+value_pointer_to :: proc(builder: ^Function_Builder, value: ^Value, loc := #caller_location) -> ^Value
 {
 	// TODO support registers
 	// TODO support immediates
@@ -463,7 +480,7 @@ value_pointer_to :: proc(builder: ^Fn_Builder, value: ^Value, loc := #caller_loc
 	return result
 }
 
-call_function_overload :: proc(builder: ^Fn_Builder, to_call: ^Value, args: ..^Value) -> ^Value
+call_function_overload :: proc(builder: ^Function_Builder, to_call: ^Value, args: ..^Value) -> ^Value
 {
 	assert(to_call.descriptor.type == .Function, "Value to call must be a function")
 	descriptor := &to_call.descriptor.function
@@ -515,7 +532,7 @@ call_function_overload :: proc(builder: ^Fn_Builder, to_call: ^Value, args: ..^V
 	return descriptor.returns
 }
 
-call_function_value :: proc(builder: ^Fn_Builder, to_call: ^Value, args: ..^Value) -> ^Value
+call_function_value :: proc(builder: ^Function_Builder, to_call: ^Value, args: ..^Value) -> ^Value
 {
 	assert(to_call.descriptor.type == .Function, "Value to call must be a function")
 	overload_loop: for overload := to_call; overload != nil; overload = overload.descriptor.function.next_overload
@@ -533,17 +550,17 @@ call_function_value :: proc(builder: ^Fn_Builder, to_call: ^Value, args: ..^Valu
 	return nil
 }
 
-label_ :: proc(builder: ^Fn_Builder, label: ^Label, loc := #caller_location)
+label_ :: proc(builder: ^Function_Builder, label: ^Label, loc := #caller_location)
 {
 	push_instruction(builder, {maybe_label = label, loc = loc})
 }
 
-goto :: proc(builder: ^Fn_Builder, label: ^Label, loc := #caller_location)
+goto :: proc(builder: ^Function_Builder, label: ^Label, loc := #caller_location)
 {
 	push_instruction(builder, {jmp, {label32(label), {}, {}}, nil, loc})
 }
 
-make_if :: proc(builder: ^Fn_Builder, value: ^Value, loc := #caller_location) -> ^Label
+make_if :: proc(builder: ^Function_Builder, value: ^Value, loc := #caller_location) -> ^Label
 {
 	label := make_label()
 	byte_size := descriptor_byte_size(value.descriptor)
@@ -572,7 +589,7 @@ end_match :: label_
 
 make_case :: make_if
 
-end_case :: proc(builder: ^Fn_Builder, end_match_label: ^Label, end_case_label: ^Label, loc := #caller_location)
+end_case :: proc(builder: ^Function_Builder, end_match_label: ^Label, end_case_label: ^Label, loc := #caller_location)
 {
 	goto(builder, end_match_label, loc)
 	label_(builder, end_case_label, loc)
@@ -584,20 +601,20 @@ Loop_Builder :: struct
 	label_end:   ^Label,
 }
 
-loop_start :: proc(builder: ^Fn_Builder, loc := #caller_location) -> Loop_Builder
+loop_start :: proc(builder: ^Function_Builder, loc := #caller_location) -> Loop_Builder
 {
 	label_start := make_label()
 	push_instruction(builder, {maybe_label = label_start, loc = loc})
 	return Loop_Builder{label_start, make_label()}
 }
 
-loop_end :: proc(builder: ^Fn_Builder, loop: Loop_Builder, loc := #caller_location)
+loop_end :: proc(builder: ^Function_Builder, loop: Loop_Builder, loc := #caller_location)
 {
 	push_instruction(builder, {jmp, {label32(loop.label_start), {}, {}}, nil, loc})
 	push_instruction(builder, {maybe_label = loop.label_end})
 }
 
-make_and :: proc(builder: ^Fn_Builder, a: ^Value, b: ^Value, loc := #caller_location) -> ^Value
+make_and :: proc(builder: ^Function_Builder, a: ^Value, b: ^Value, loc := #caller_location) -> ^Value
 {
 	result := reserve_stack(builder, &descriptor_i8)
 	label := make_label()
@@ -614,7 +631,7 @@ make_and :: proc(builder: ^Fn_Builder, a: ^Value, b: ^Value, loc := #caller_loca
 	return result
 }
 
-make_or :: proc(builder: ^Fn_Builder, a: ^Value, b: ^Value, loc := #caller_location) -> ^Value
+make_or :: proc(builder: ^Function_Builder, a: ^Value, b: ^Value, loc := #caller_location) -> ^Value
 {
 	result := reserve_stack(builder, &descriptor_i8)
 	label := make_label()
@@ -643,16 +660,16 @@ peek :: proc(arr: ^[dynamic]$E, loc := #caller_location) -> E
 
 Function_Context :: struct
 {
-	builder:     Fn_Builder,
+	builder:     ^Function_Builder,
 	if_stack:    [dynamic]^Label,
 	match_stack: [dynamic]^Label,
 	case_stack:  [dynamic]^Label,
 	loop_stack:  [dynamic]Loop_Builder,
 }
 
-get_builder_from_context :: proc() -> ^Fn_Builder
+get_builder_from_context :: proc() -> ^Function_Builder
 {
-	return &(cast(^Function_Context)context.user_ptr).builder
+	return (cast(^Function_Context)context.user_ptr).builder
 }
 
 get_if_stack_from_context :: proc() -> ^[dynamic]^Label
@@ -679,11 +696,13 @@ get_loop_stack_from_context :: proc() -> ^[dynamic]Loop_Builder
 //
 //
 
-Function :: proc(program: ^Program = nil) -> (^Value, ^Fn_Builder)
+Function :: proc(program: ^Program = nil) -> (result: ^Value, builder: ^Function_Builder)
 {
-	builder := get_builder_from_context()
-	result: ^Value
-	result, builder^ = fn_begin(program == nil ? &test_program : program)
+	program := program == nil ? &test_program : program
+	
+	result, builder = fn_begin(program)
+	(cast(^Function_Context)context.user_ptr).builder = builder
+	
 	return result, builder
 }
 

@@ -213,11 +213,11 @@ write_executable :: proc(program: ^Program)
 	// .text segment
 	exe_buffer.occupied = int(text_section_header.PointerToRawData)
 	
-	program.code_base_file_offset   = exe_buffer.occupied
-	program.code_base_rva           = i32(text_section_header.VirtualAddress)
-	program.entry_point.buffer      = &exe_buffer
-	program.entry_point.code_offset = exe_buffer.occupied
+	program.code_base_file_offset = exe_buffer.occupied
+	program.code_base_rva         = i32(text_section_header.VirtualAddress)
+	program.entry_point.buffer    = &exe_buffer
 	fn_end(program.entry_point)
+	program_end(program)
 	
 	// buffer_append(&exe_buffer, [?]byte \
 	// {

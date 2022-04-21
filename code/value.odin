@@ -241,24 +241,14 @@ print_operand :: proc(operand: ^Operand)
 	}
 }
 
-Program :: struct
-{
-	data_buffer:           Buffer,
-	function_buffer:       Buffer,
-	import_libraries:      [dynamic]Import_Library,
-	entry_point:           ^Fn_Builder,
-	code_base_rva:         i32,
-	code_base_file_offset: int,
-}
-
-Fn_Builder :: struct
+Function_Builder :: struct
 {
 	stack_reserve: i32,
 	max_call_parameters_stack_size: i32,
 	
 	buffer: ^Buffer,
-	code_offset: int,
 	
+	prolog_label: ^Label,
 	epilog_label: ^Label,
 	
 	instructions: [dynamic]Instruction,
@@ -266,6 +256,17 @@ Fn_Builder :: struct
 	program: ^Program,
 	
 	result: ^Value,
+}
+
+Program :: struct
+{
+	data_buffer:           Buffer,
+	function_buffer:       Buffer,
+	import_libraries:      [dynamic]Import_Library,
+	entry_point:           ^Function_Builder,
+	functions:             [dynamic]Function_Builder,
+	code_base_rva:         i32,
+	code_base_file_offset: int,
 }
 
 // AL, AX, EAX, RAX
@@ -621,6 +622,7 @@ value_byte_size :: proc(value: ^Value) -> ^Value
 value_as_function :: proc(value: ^Value, $T: typeid) -> T
 {
 	assert(value.operand.type == .Label_32, "Function value is Label")
+	assert(value.operand.label32.target != nil, "Function label has target")
 	return T(value.operand.label32.target)
 }
 

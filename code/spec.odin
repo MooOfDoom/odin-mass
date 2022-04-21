@@ -6,7 +6,7 @@ import "core:sys/win32"
 
 DEBUG_PRINT :: true
 
-fn_reflect :: proc(builder: ^Fn_Builder, descriptor: ^Descriptor) -> ^Value
+fn_reflect :: proc(builder: ^Function_Builder, descriptor: ^Descriptor) -> ^Value
 {
 	result := reserve_stack(builder, &descriptor_struct_reflection)
 	// FIXME support all types
@@ -132,7 +132,7 @@ struct_get_field :: proc(struct_value: ^Value, name: string) -> ^Value
 	return nil
 }
 
-maybe_cast_to_tag :: proc(builder: ^Fn_Builder, name: string, value: ^Value) -> ^Value
+maybe_cast_to_tag :: proc(builder: ^Function_Builder, name: string, value: ^Value) -> ^Value
 {
 	assert(value.descriptor.type == .Pointer)
 	descriptor := value.descriptor.pointer_to
@@ -190,7 +190,7 @@ maybe_cast_to_tag :: proc(builder: ^Fn_Builder, name: string, value: ^Value) -> 
 
 MaybeCastToTag :: proc(name: string, value: ^Value) -> ^Value
 {
-	builder := cast(^Fn_Builder)context.user_ptr
+	builder := get_builder_from_context()
 	
 	return maybe_cast_to_tag(builder, name, value)
 }
@@ -212,6 +212,7 @@ create_is_character_in_set_checker_fn :: proc(characters: string) -> fn_type_i32
 		Return(value_from_i8(0))
 	}
 	End_Function()
+	program_end(&test_program)
 	return value_as_function(checker, fn_type_i32_to_i8)
 }
 
@@ -227,12 +228,17 @@ mass_spec :: proc()
 	
 	before_each(proc()
 	{
+		free_all()
 		test_program =
 		{
-			function_buffer = make_buffer(128 * 1024, win32.PAGE_EXECUTE_READWRITE),
-			data_buffer     = make_buffer(1024 * 1024, win32.PAGE_READWRITE),
+			function_buffer  = make_buffer(128 * 1024, win32.PAGE_EXECUTE_READWRITE),
+			data_buffer      = make_buffer(1024 * 1024, win32.PAGE_READWRITE),
+			import_libraries = make([dynamic]Import_Library, 0, 16),
+			functions        = make([dynamic]Function_Builder, 0, 16),
 		}
-		free_all()
+		// FIXME make sure that this fits into i32
+		test_program.code_base_rva =
+			i32(uintptr(&test_program.function_buffer.memory[0]) - uintptr(&test_program.data_buffer.memory[0]))
 		
 		// NOTE(Lothar): Need to clear the fn_context so that its dynamic arrays don't continue to point
 		// into the freed temp buffer
@@ -302,6 +308,7 @@ mass_spec :: proc()
 			Return(x)
 		}
 		End_Function()
+		program_end(&test_program)
 		
 		checker := value_as_function(checker_value, fn_void_to_i64)
 		check(checker() == 42)
@@ -340,6 +347,7 @@ mass_spec :: proc()
 			Return(Plus(global_a, global_b))
 		}
 		End_Function()
+		program_end(&test_program)
 		
 		checker := value_as_function(return_42, fn_void_to_i32)
 		check(checker() == 42)
@@ -372,6 +380,7 @@ mass_spec :: proc()
 			Return(StructField(struct_, "field_count"))
 		}
 		End_Function()
+		program_end(&test_program)
 		
 		result := value_as_function(field_count, fn_void_to_i32)()
 		check(result == 2)
@@ -423,6 +432,7 @@ mass_spec :: proc()
 			Return(default_value)
 		}
 		End_Function()
+		program_end(&test_program)
 		
 		with_default := value_as_function(with_default_value, fn_rawptr_i64_to_i64)
 		test_none: struct {tag: i64, maybe_value: i64} = {}
@@ -499,6 +509,7 @@ mass_spec :: proc()
 			                StructField(size_struct, "height")))
 		}
 		End_Function()
+		program_end(&test_program)
 		
 		size: struct {width: i32, height: i32, dummy: i32} = {10, 42, 0}
 		result: i32 = value_as_function(area, fn_rawptr_to_i32)(&size)
@@ -566,6 +577,7 @@ mass_spec :: proc()
 			End_Loop()
 		}
 		End_Function()
+		program_end(&test_program)
 		
 		value_as_function(increment, fn_pi32_to_void)(&array[0])
 		check(array[0] == 2)

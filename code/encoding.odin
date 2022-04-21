@@ -18,7 +18,7 @@ REX_R :u8: 0b01000100 // Extension of the ModR/M reg field
 REX_X :u8: 0b01000010 // Extension of the SIB index field
 REX_B :u8: 0b01000001 // Extension of the ModR/M r/m field, SIB base field, or Opcode reg field
 
-encode_instruction :: proc(builder: ^Fn_Builder, instruction: Instruction)
+encode_instruction :: proc(builder: ^Function_Builder, instruction: Instruction)
 {
 	instruction := instruction
 	
@@ -27,7 +27,7 @@ encode_instruction :: proc(builder: ^Fn_Builder, instruction: Instruction)
 	if instruction.maybe_label != nil
 	{
 		label := instruction.maybe_label
-		assert(label.target == nil)
+		assert(label.target == nil, "Same label was encoded twice")
 		label.target = &buffer.memory[buffer.occupied]
 		
 		for location in label.locations

@@ -49,6 +49,7 @@ function_spec :: proc()
 			data_buffer      = make_buffer(128 * 1024, win32.PAGE_READWRITE),
 			function_buffer  = make_buffer(128 * 1024, win32.PAGE_EXECUTE_READWRITE),
 			import_libraries = make([dynamic]Import_Library, 0, 16),
+			functions        = make([dynamic]Function_Builder, 0, 16),
 		}
 		// FIXME make sure that this fits into i32
 		test_program.code_base_rva =
@@ -74,10 +75,9 @@ function_spec :: proc()
 		
 		checker_value, f := Function(program)
 		{
+			program.entry_point = f
 			Return(Call(ExitProcess_value, value_from_i32(42)))
 		}
-		
-		program.entry_point = f
 		
 		write_executable(program)
 	})
@@ -93,6 +93,7 @@ function_spec :: proc()
 			           condition))
 		}
 		End_Function()
+		program_end(&test_program)
 		
 		checker := value_as_function(checker_value, fn_i32_i8_to_i8)
 		
@@ -113,6 +114,7 @@ function_spec :: proc()
 			          condition))
 		}
 		End_Function()
+		program_end(&test_program)
 		
 		checker := value_as_function(checker_value, fn_i32_i8_to_i8)
 		
@@ -152,6 +154,7 @@ function_spec :: proc()
 			Return(result)
 		}
 		End_Function()
+		program_end(&test_program)
 		
 		checker := value_as_function(checker_value, fn_i32_to_i32)
 		
@@ -186,6 +189,7 @@ function_spec :: proc()
 			Return(Plus(x, y))
 		}
 		End_Function()
+		program_end(&test_program)
 		
 		// previous: u32
 		// win32.virtual_protect(&test_program.function_buffer.memory[0], len(test_program.function_buffer.memory), win32.PAGE_EXECUTE, &previous)
@@ -209,6 +213,7 @@ function_spec :: proc()
 			Call(addtwo_i64, value_from_i64(0))
 		}
 		End_Function()
+		program_end(&test_program)
 	})
 	
 	it("should say functions with the same signature have the same type)", proc()
@@ -224,6 +229,7 @@ function_spec :: proc()
 			_ = Arg_i32()
 		}
 		End_Function()
+		program_end(&test_program)
 		
 		check(same_value_type(a, b))
 	})
@@ -255,6 +261,7 @@ function_spec :: proc()
 			Return(value_from_i32(0))
 		}
 		End_Function()
+		program_end(&test_program)
 		
 		check(!same_value_type(a, b))
 		check(!same_value_type(a, c))
@@ -271,6 +278,7 @@ function_spec :: proc()
 			Return(value_from_i32(42))
 		}
 		End_Function()
+		program_end(&test_program)
 		
 		result := value_as_function(the_answer, fn_void_to_i32)()
 		check(result == 42)
@@ -284,6 +292,7 @@ function_spec :: proc()
 			Return(x)
 		}
 		End_Function()
+		program_end(&test_program)
 		
 		result := value_as_function(id_i64, fn_i64_to_i64)(42)
 		check(result == 42)
@@ -302,6 +311,7 @@ function_spec :: proc()
 			Return(Plus(x, Minus(two, one)))
 		}
 		End_Function()
+		program_end(&test_program)
 		
 		result := value_as_function(inc_i32, fn_i32_to_i32)(42)
 		check(result == 43)
@@ -322,6 +332,7 @@ function_spec :: proc()
 			Return(value_from_i32(1))
 		}
 		End_Function()
+		program_end(&test_program)
 		
 		is_non_zero := value_as_function(is_non_zero_value, fn_i32_to_i32)
 		result := is_non_zero(0)
@@ -339,6 +350,7 @@ function_spec :: proc()
 			Return(to_return)
 		}
 		End_Function()
+		program_end(&test_program)
 		
 		result := value_as_function(twice, fn_i64_to_i64)(42)
 		check(result == 84)
@@ -354,6 +366,7 @@ function_spec :: proc()
 			Return(to_return)
 		}
 		End_Function()
+		program_end(&test_program)
 		
 		result: i32 = value_as_function(divide_fn, fn_i32_i32_to_i32)(-42, 2)
 		check(result == -21)
@@ -373,6 +386,7 @@ function_spec :: proc()
 			Return(Call(fn))
 		}
 		End_Function()
+		program_end(&test_program)
 		
 		result := value_as_function(caller, fn__void_to_i32__to_i32)(
 			value_as_function(the_answer, fn_void_to_i32),
@@ -394,6 +408,7 @@ function_spec :: proc()
 			Return(Call(id_i64, value_from_i64(42)))
 		}
 		End_Function()
+		program_end(&test_program)
 		
 		the_answer := value_as_function(partial, fn_void_to_i64)
 		result := the_answer()
@@ -410,6 +425,7 @@ function_spec :: proc()
 			Return(arg2)
 		}
 		End_Function()
+		program_end(&test_program)
 		
 		result := value_as_function(third, fn_i64_i64_i64_to_i64)(1, 2, 3)
 		check(result == 3)
@@ -428,6 +444,7 @@ function_spec :: proc()
 			Return(arg5)
 		}
 		End_Function()
+		program_end(&test_program)
 		
 		result := value_as_function(args, fn_i64_i64_i64_i64_i64_i64_to_i64)(1, 2, 3, 4, 5, 6)
 		check(result == 6)
@@ -458,6 +475,7 @@ function_spec :: proc()
 			            value_from_i64(60)))
 		}
 		End_Function()
+		program_end(&test_program)
 		
 		result := value_as_function(caller, fn_void_to_i64)()
 		check(result == 60)
@@ -499,6 +517,7 @@ function_spec :: proc()
 			Return(Call(GetStdHandle_value, value_from_i32(win32.STD_INPUT_HANDLE)))
 		}
 		End_Function()
+		program_end(&test_program)
 		
 		check(value_as_function(checker_value, fn_void_to_i64)() == i64(uintptr(win32.get_std_handle(win32.STD_INPUT_HANDLE))))
 	})
@@ -520,6 +539,7 @@ function_spec :: proc()
 			Call(puts_value, &message_value)
 		}
 		End_Function()
+		program_end(&test_program)
 		
 		value_as_function(hello, fn_void_to_void)()
 	})
@@ -546,6 +566,7 @@ function_spec :: proc()
 			Call(puts_value, PointerTo(message_value))
 		}
 		End_Function()
+		program_end(&test_program)
 		
 		value_as_function(hello, fn_void_to_void)()
 	})
@@ -575,6 +596,7 @@ function_spec :: proc()
 			Return(Plus(f_minus_one, f_minus_two))
 		}
 		End_Function()
+		program_end(&test_program)
 		
 		f := value_as_function(fib, fn_i64_to_i64)
 		check(f(0) == 0)
