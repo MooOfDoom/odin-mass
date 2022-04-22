@@ -309,34 +309,33 @@ mass_spec :: proc()
 		check(checker() == 42)
 	})
 	
-	// FIXME
-	// it("should support RIP-relative addressing", proc()
-	// {
-	// 	global_a := value_global(&test_program, &descriptor_i32)
-	// 	{
-	// 		check(global_a.operand.type == .RIP_Relative)
+	it("should support RIP-relative addressing", proc()
+	{
+		global_a := value_global(&test_program, &descriptor_i32)
+		{
+			check(global_a.operand.type == .RIP_Relative)
 			
-	// 		address := cast(^i32)uintptr(global_a.operand.imm64)
-	// 		address^ = 32
-	// 	}
-	// 	global_b := value_global(&test_program, &descriptor_i32)
-	// 	{
-	// 		check(global_b.operand.type == .RIP_Relative)
+			address := cast(^i32)rip_value_pointer(&test_program, global_a)
+			address^ = 32
+		}
+		global_b := value_global(&test_program, &descriptor_i32)
+		{
+			check(global_b.operand.type == .RIP_Relative)
 			
-	// 		address := cast(^i32)uintptr(global_b.operand.imm64)
-	// 		address^ = 10
-	// 	}
+			address := cast(^i32)rip_value_pointer(&test_program, global_b)
+			address^ = 10
+		}
 		
-	// 	return_42, f := Function()
-	// 	{
-	// 		Return(Plus(global_a, global_b))
-	// 	}
-	// 	End_Function()
-	// 	program_end(&test_program)
+		return_42, f := Function()
+		{
+			Return(Plus(global_a, global_b))
+		}
+		End_Function()
+		program_end(&test_program)
 		
-	// 	checker := value_as_function(return_42, fn_void_to_i32)
-	// 	check(checker() == 42)
-	// })
+		checker := value_as_function(return_42, fn_void_to_i32)
+		check(checker() == 42)
+	})
 	
 	it("should support sizeof operator on values", proc()
 	{

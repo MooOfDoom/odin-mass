@@ -35,17 +35,19 @@ Label :: struct
 	locations: [dynamic]Label_Location,
 }
 
-Import_Name_To_Rva :: struct
+Import_Symbol :: struct
 {
-	name:     string,
-	name_rva: u32,
-	iat_rva:  u32,
+	name:           string,
+	name_rva:       u32,
+	offset_in_data: u32,
 }
 
 Import_Library :: struct
 {
-	dll:             Import_Name_To_Rva,
-	symbols:         [dynamic]Import_Name_To_Rva,
+	name:            string,
+	name_rva:        u32,
+	iat_rva:         u32,
+	symbols:         [dynamic]Import_Symbol,
 	image_thunk_rva: u32,
 }
 
@@ -226,8 +228,7 @@ print_operand :: proc(operand: ^Operand)
 		}
 		case .RIP_Relative:
 		{
-			// FIXME calculate this offset
-			fmt.printf("rip_to(0x%016x)", operand.imm64)
+			fmt.printf("[.rdata + 0x%x]", operand.rip_offset_in_data)
 		}
 		case .RIP_Relative_Import:
 		{
@@ -253,20 +254,18 @@ Function_Builder :: struct
 	epilog_label: ^Label,
 	
 	instructions: [dynamic]Instruction,
-	
-	program: ^Program,
-	
-	result: ^Value,
+	program:      ^Program,
+	result:       ^Value,
 }
 
 Program :: struct
 {
-	data_buffer:           Buffer,
-	import_libraries:      [dynamic]Import_Library,
-	entry_point:           ^Function_Builder,
-	functions:             [dynamic]Function_Builder,
-	code_base_rva:         i64,
-	data_base_rva:         i64,
+	data_buffer:      Buffer,
+	import_libraries: [dynamic]Import_Library,
+	entry_point:      ^Function_Builder,
+	functions:        [dynamic]Function_Builder,
+	code_base_rva:    i64,
+	data_base_rva:    i64,
 }
 
 Jit_Program :: struct
@@ -485,6 +484,12 @@ value_register_for_descriptor :: proc(reg: Register, descriptor: ^Descriptor) ->
 	})
 }
 
+rip_value_pointer :: proc(program: ^Program, value: ^Value) -> [^]byte
+{
+	assert(value.operand.type == .RIP_Relative)
+	return &program.data_buffer.memory[value.operand.rip_offset_in_data]
+}
+
 value_global :: proc(program: ^Program, descriptor: ^Descriptor) -> ^Value
 {
 	byte_size := descriptor_byte_size(descriptor)
@@ -502,6 +507,26 @@ value_global :: proc(program: ^Program, descriptor: ^Descriptor) -> ^Value
 			data      = {rip_offset_in_data = program.data_buffer.occupied - int(byte_size)},
 		},
 	})
+	return result
+}
+
+value_global_c_string :: proc(program: ^Program, str: string) -> ^Value
+{
+	length := i32(len(str) + 1)
+	result := value_global(program, new_clone(Descriptor \
+	{
+		type = .Fixed_Size_Array,
+		data = {array =
+		{
+			item = &descriptor_i8,
+			length = length,
+		}},
+	}))
+	
+	address := program.data_buffer.memory[result.operand.rip_offset_in_data:result.operand.rip_offset_in_data + int(length)]
+	copy(address, str)
+	address[length - 1] = 0
+	
 	return result
 }
 
@@ -874,13 +899,33 @@ odin_function_value :: proc(forward_declaration: string, fn: fn_opaque) -> ^Valu
 	})
 }
 
+ascii_strings_match_case_insensitive :: proc(a: string, b: string) -> bool
+{
+	if len(a) != len(b) do return false
+	
+	for i in 0 ..< len(a)
+	{
+		assert(a[i] <= 0x7f && b[i] <= 0x7f)
+		lower_a := a[i] | 0x20
+		lower_b := b[i] | 0x20
+		if lower_a >= 'a' && lower_a <= 'z'
+		{
+			if lower_a != lower_b do return false
+		}
+		else if a[i] != b[i]
+		{
+			return false
+		}
+	}
+	return true
+}
+
 import_symbol :: proc(program: ^Program, library_name: string, symbol_name: string) -> Operand
 {
 	library: ^Import_Library
 	for lib in &program.import_libraries
 	{
-		// FIXME Use case-insensitive compare
-		if lib.dll.name == library_name
+		if ascii_strings_match_case_insensitive(lib.name, library_name)
 		{
 			library = &lib
 		}
@@ -890,19 +935,16 @@ import_symbol :: proc(program: ^Program, library_name: string, symbol_name: stri
 	{
 		append(&program.import_libraries, Import_Library \
 		{
-			dll =
-			{
-				name     = library_name,
-				name_rva = 0xcccccccc,
-				iat_rva  = 0xcccccccc,
-			},
+			name            = library_name,
+			name_rva        = 0xcccccccc,
+			iat_rva         = 0xcccccccc,
 			image_thunk_rva = 0xcccccccc,
-			symbols = make([dynamic]Import_Name_To_Rva, 0, 16),
+			symbols         = make([dynamic]Import_Symbol, 0, 16),
 		})
 		library = &program.import_libraries[len(program.import_libraries) - 1]
 	}
 	
-	symbol: ^Import_Name_To_Rva
+	symbol: ^Import_Symbol
 	for sym in &library.symbols
 	{
 		if sym.name == symbol_name
@@ -913,13 +955,12 @@ import_symbol :: proc(program: ^Program, library_name: string, symbol_name: stri
 	
 	if symbol == nil
 	{
-		append(&library.symbols, Import_Name_To_Rva \
+		append(&library.symbols, Import_Symbol \
 		{
-			name     = symbol_name,
-			name_rva = 0xcccccccc,
-			iat_rva  = 0xcccccccc,
+			name           = symbol_name,
+			name_rva       = 0xcccccccc,
+			offset_in_data = 0,
 		})
-		// symbol = &library.symbols[len(library.symbols) - 1]
 	}
 	
 	return Operand \
@@ -947,11 +988,11 @@ odin_function_import :: proc(program: ^Program, library_name: string, forward_de
 	})
 }
 
-program_find_import :: proc(program: ^Program, library_name: string, symbol_name: string) -> ^Import_Name_To_Rva
+program_find_import :: proc(program: ^Program, library_name: string, symbol_name: string) -> ^Import_Symbol
 {
 	for lib in &program.import_libraries
 	{
-		if lib.dll.name != library_name do continue
+		if !ascii_strings_match_case_insensitive(lib.name, library_name) do continue
 		
 		for sym in &lib.symbols
 		{
@@ -969,8 +1010,8 @@ estimate_max_code_size_in_bytes :: proc(program: ^Program) -> int
 	total_instruction_count: int
 	for builder in &program.functions
 	{
-		// NOTE(Lothar): @Volatile Plus 1 because fn_encode adds 15 bytes worth of instructions
-		total_instruction_count += len(builder.instructions) + 1 
+		// NOTE(Lothar): @Volatile Plus 2 because fn_encode adds 16 bytes worth of instructions
+		total_instruction_count += len(builder.instructions) + 2 
 	}
 	// TODO this should be architecture-dependent
 	max_bytes_per_instruction :: 15

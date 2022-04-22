@@ -47,7 +47,7 @@ encode_rdata_section :: proc(program: ^Program, header: ^IMAGE_SECTION_HEADER) -
 	for lib in &program.import_libraries
 	{
 		// Aligned to 2 bytes c string of library name
-		expected_encoded_size += align(len(lib.dll.name) + 1, 2)
+		expected_encoded_size += align(len(lib.name) + 1, 2)
 		for sym in &lib.symbols
 		{
 			{
@@ -107,10 +107,10 @@ encode_rdata_section :: proc(program: ^Program, header: ^IMAGE_SECTION_HEADER) -
 	result.iat_rva = get_rva(buffer, header)
 	for lib in &program.import_libraries
 	{
-		lib.dll.iat_rva = get_rva(buffer, header)
+		lib.iat_rva = get_rva(buffer, header)
 		for sym in &lib.symbols
 		{
-			sym.iat_rva = get_rva(buffer, header)
+			sym.offset_in_data = get_rva(buffer, header) - header.VirtualAddress
 			buffer_append(buffer, u64(sym.name_rva))
 		}
 		// End of IAT list
@@ -133,10 +133,10 @@ encode_rdata_section :: proc(program: ^Program, header: ^IMAGE_SECTION_HEADER) -
 	// Library Names
 	for lib in &program.import_libraries
 	{
-		lib.dll.name_rva = get_rva(buffer, header)
+		lib.name_rva = get_rva(buffer, header)
 		{
-			aligned_name_size := align(len(lib.dll.name) + 1, 2)
-			copy(buffer_allocate_size(buffer, aligned_name_size), lib.dll.name)
+			aligned_name_size := align(len(lib.name) + 1, 2)
+			copy(buffer_allocate_size(buffer, aligned_name_size), lib.name)
 		}
 	}
 	
@@ -148,8 +148,8 @@ encode_rdata_section :: proc(program: ^Program, header: ^IMAGE_SECTION_HEADER) -
 		image_import_descriptor^ =
 		{
 			OriginalFirstThunk = lib.image_thunk_rva,
-			Name               = lib.dll.name_rva,
-			FirstThunk         = lib.dll.iat_rva,
+			Name               = lib.name_rva,
+			FirstThunk         = lib.iat_rva,
 		}
 	}
 	

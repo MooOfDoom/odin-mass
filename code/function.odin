@@ -3,6 +3,7 @@ package main
 import "core:fmt"
 import "core:mem"
 import "core:runtime"
+import "core:strings"
 import "core:sys/win32"
 
 TO_BE_PATCHED     :i32: -858993460 // 0xcccccccc
@@ -41,32 +42,25 @@ move_value :: proc(builder: ^Function_Builder, a: ^Value, b: ^Value, loc := #cal
 	if is_memory_operand(&a.operand) && is_memory_operand(&b.operand)
 	{
 		reg_a := value_register_for_descriptor(.A, a.descriptor)
-		// TODO Can be a problem if RAX is already used as temp
 		move_value(builder, reg_a, b)
 		move_value(builder, a, reg_a)
 		return
 	}
 	
-	// if a_size != b_size
-	// {
-	// 	if b.operand.typ == .Memory_Indirect ||
-	// 	if !(b.operand.type == .Immediate_32 && a_size == 8)
-	// 	{
-	// 		assert(false, "Mismatched operand size when moving")
-	// 	}
-	// }
-	
-	if b_size == 1 && a_size >= 2 && a_size < 8
+	if a_size != b_size
 	{
-		assert(a.operand.type == .Register)
-		zero := value_from_i64(0)
-		zero.descriptor = a.descriptor
-		
-		move_value(builder, a, zero)
-		push_instruction(builder, {mov, {a.operand, b.operand, {}}, nil, loc})
-		// FIXME use movsx
-		// push_instruction(builder, {movsx, {a.operand, b.operand, {}}, nil, loc})
-		return
+		if (a.operand.type == .Register &&
+		    b_size < a_size &&
+		    a_size <= 4)
+		{
+			// TODO deal with unsigned numbers
+			push_instruction(builder, {movsx, {a.operand, b.operand, {}}, nil, loc})
+			return
+		}
+		else if !(b.operand.type == .Immediate_32 && a_size == 8)
+		{
+			assert(false, "Mismatched operand size when moving")
+		}
 	}
 	
 	if (a.operand.type == .Register &&
@@ -174,8 +168,7 @@ fn_encode :: proc(buffer: ^Buffer, builder: ^Function_Builder, loc := #caller_lo
 	
 	encode_instruction(buffer, builder, {add, {rsp, imm_auto(builder.stack_reserve), {}}, nil, loc})
 	encode_instruction(buffer, builder, {ret, {}, nil, loc})
-	// FIXME add encoding
-	// buffer_append_u8(buffer, 0xcc) // int3
+	encode_instruction(buffer, builder, {int3, {}, nil, loc})
 	
 	if DEBUG_PRINT do print_buffer(buffer.memory[code_start:buffer.occupied])
 	
@@ -190,15 +183,23 @@ program_end :: proc(program: ^Program, loc := #caller_location) -> Jit_Program
 		code_buffer = make_buffer(code_buffer_size, win32.PAGE_EXECUTE_READWRITE),
 		data_buffer = program.data_buffer,
 	}
-	if code_buffer_size == 0
-	{
-		fmt.println(result.code_buffer)
-	}
-	// diff := i64(uintptr(&result.code_buffer.memory[0]) - uintptr(&result.data_buffer.memory[0]))
-	// assert(fits_into_i32(diff), "Code and data buffers too far apart")
-	// program.code_base_rva = i32(diff)
 	program.code_base_rva = i64(uintptr(&result.code_buffer.memory[0]))
 	program.data_base_rva = i64(uintptr(&result.data_buffer.memory[0]))
+	
+	for lib in &program.import_libraries
+	{
+		dll_handle := win32.load_library_a(strings.clone_to_cstring(lib.name))
+		assert(dll_handle != nil, "DLL could not be loaded")
+		for sym in &lib.symbols
+		{
+			sym_address := win32.get_proc_address(dll_handle, strings.clone_to_cstring(sym.name))
+			check(sym_address != nil)
+			offset_in_data := program.data_buffer.occupied
+			buffer_append(&program.data_buffer, sym_address)
+			assert(fits_into_u32(offset_in_data), "RIP offset of import too far")
+			sym.offset_in_data = u32(offset_in_data)
+		}
+	}
 	
 	for builder in &program.functions
 	{
@@ -338,7 +339,6 @@ multiply :: proc(builder: ^Function_Builder, x: ^Value, y: ^Value, loc := #calle
 	reg_a = value_register_for_descriptor(.A, x.descriptor)
 	move_value(builder, reg_a, x)
 	
-	// TODO check operand sizes
 	push_instruction(builder, {imul, {reg_a.operand, y_temp.operand, {}}, nil, loc})
 	
 	temp := reserve_stack(builder, x.descriptor)
@@ -411,6 +411,7 @@ Compare :: enum
 compare :: proc(builder: ^Function_Builder, operation: Compare, a: ^Value, b: ^Value, loc := #caller_location) -> ^Value
 {
 	assert(same_value_type(a, b), "Types match in compare")
+	assert(a.descriptor.type == .Integer, "Can only compare integers")
 	
 	temp_b := reserve_stack(builder, b.descriptor)
 	move_value(builder, temp_b, b)
@@ -418,7 +419,6 @@ compare :: proc(builder: ^Function_Builder, operation: Compare, a: ^Value, b: ^V
 	reg_a := value_register_for_descriptor(.A, a.descriptor)
 	move_value(builder, reg_a, a)
 	
-	// TODO check that types are comparable
 	push_instruction(builder, {cmp, {reg_a.operand, temp_b.operand, {}}, nil, loc})
 	
 	result := reserve_stack(builder, &descriptor_i8)

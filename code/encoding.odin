@@ -235,25 +235,19 @@ encode_instruction :: proc(buffer: ^Buffer, builder: ^Function_Builder, instruct
 				if operand.type == .RIP_Relative_Import
 				{
 					program              := builder.program
-					next_instruction_rva := i64(program.code_base_rva) + i64(buffer.occupied) + size_of(i32)
+					next_instruction_rva := program.code_base_rva + i64(buffer.occupied) + size_of(i32)
 					
-					lib_loop: for lib in &program.import_libraries
+					sym := program_find_import(program, operand.import_.library_name, operand.import_.symbol_name)
+					if (sym != nil)
 					{
-						if lib.dll.name != operand.import_.library_name do continue
+						diff := program.data_base_rva + i64(sym.offset_in_data) - next_instruction_rva
+						assert(fits_into_i32(diff), "RIP relative import address too distant")
+						displacement := i32(diff)
 						
-						for sym in &lib.symbols
-						{
-							if sym.name == operand.import_.symbol_name
-							{
-								diff := i64(sym.iat_rva) - next_instruction_rva
-								assert(fits_into_i32(diff), "RIP relative import address too distant")
-								displacement := i32(diff)
-								
-								buffer_append(buffer, displacement)
-								
-								break lib_loop
-							}
-						}
+						buffer_append(buffer, displacement)
+					}
+					else
+					{
 						assert(false, fmt.tprintf("Import %v:%v not found in program import libraries",
 						                          operand.import_.library_name, operand.import_.symbol_name))
 					}
@@ -261,9 +255,7 @@ encode_instruction :: proc(buffer: ^Buffer, builder: ^Function_Builder, instruct
 				else if operand.type == .RIP_Relative
 				{
 					program              := builder.program
-					next_instruction_rva := i64(program.code_base_rva) + i64(buffer.occupied) + size_of(i32)
-					// start_address            := i64(uintptr(&buffer.memory[0]))
-					// next_instruction_address := start_address + i64(buffer.occupied) + size_of(i32)
+					next_instruction_rva := program.code_base_rva + i64(buffer.occupied) + size_of(i32)
 					
 					operand_rva := program.data_base_rva + i64(operand.rip_offset_in_data)
 					diff := operand_rva - next_instruction_rva
