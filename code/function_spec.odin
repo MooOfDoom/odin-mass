@@ -62,7 +62,7 @@ function_spec :: proc()
 		free_buffer(&test_program.data_buffer)
 	})
 	
-	it("should write out an executable", proc()
+	it("should write out an executable that exits with status code 42", proc()
 	{
 		program := &test_program
 		
@@ -81,7 +81,55 @@ function_spec :: proc()
 		}
 		End_Function()
 		
-		write_executable(program)
+		write_executable("build\\test.exe", program)
+	})
+	
+	it("should write out an executable that prints Hello, world!", proc()
+	{
+		program := &test_program
+		
+		GetStdHandle_value := odin_function_import(program, "kernel32.dll", `GetStdHandle :: proc "std" (i32) -> i64`)
+		STD_OUTPUT_HANDLE_value := value_from_i32(-11)
+		ExitProcess_value  := odin_function_import(program, "kernel32.dll", `ExitProcess :: proc "std" (i32)`)
+		WriteFile_value := odin_function_import(program, "kernel32.dll",
+		                                        `WriteFile :: proc "std" (i64, rawptr, i32, ^i32, i64) -> i8`)
+		
+		hello_world_string := "Hello, world!!!!!!!!!"
+		hello_world_length := i32(len(hello_world_string))
+		message_descriptor: Descriptor =
+		{
+			type = .Fixed_Size_Array,
+			data = {array =
+			{
+				item = &descriptor_i8,
+				length = hello_world_length,
+			}},
+		}
+		
+		message_value := value_global(program, &message_descriptor)
+		address := program.data_buffer.memory[message_value.operand.rip_offset_in_data:message_value.operand.rip_offset_in_data + int(hello_world_length)]
+		copy(address, hello_world_string)
+		fmt.println(message_value.operand.rip_offset_in_data)
+		print_buffer(program.data_buffer.memory[:hello_world_length])
+		
+		main, f := Function()
+		{
+			program.entry_point = f
+			handle            := Call(GetStdHandle_value, STD_OUTPUT_HANDLE_value)
+			bytes_written     := Stack_i32(value_from_i32(0))
+			message_ptr       := PointerTo(message_value)
+			bytes_written_ptr := PointerTo(bytes_written)
+			Call(WriteFile_value,
+			     handle,            // hFile
+			     message_ptr,       // lpBuffer
+			     value_from_i32(hello_world_length), // nNumberOfBytesToWrite
+			     bytes_written_ptr, // lpNumberOfBytesWritten
+			     value_from_i64(0)) // lpOverlapped
+			Call(ExitProcess_value, value_from_i32(0))
+		}
+		End_Function()
+		
+		write_executable("build\\hello_world.exe", program)
 	})
 	
 	it("should support short-circuiting &&", proc()
@@ -489,40 +537,40 @@ function_spec :: proc()
 		odin_function_descriptor(`proc "c" (int)`)
 	})
 	
-	it("should be able to call imported function", proc()
-	{
-		program := &test_program
-		GetStdHandle_value := odin_function_import(program,
-		                                           "kernel32.dll",
-		                                           `GetStdHandle :: proc "std" (i32) -> rawptr`)
+	// it("should be able to call imported function", proc()
+	// {
+	// 	program := &test_program
+	// 	GetStdHandle_value := odin_function_import(program,
+	// 	                                           "kernel32.dll",
+	// 	                                           `GetStdHandle :: proc "std" (i32) -> rawptr`)
 		
-		// TODO extract into a function
-		kernel32 := win32.load_library_a(strings.clone_to_cstring(GetStdHandle_value.operand.import_.library_name))
-		check(kernel32 != nil)
-		GetStdHandle_from_dll := win32.get_proc_address(kernel32, "GetStdHandle")
-		check(GetStdHandle_from_dll != nil)
+	// 	// TODO extract into a function
+	// 	kernel32 := win32.load_library_a(strings.clone_to_cstring(GetStdHandle_value.operand.import_.library_name))
+	// 	check(kernel32 != nil)
+	// 	GetStdHandle_from_dll := win32.get_proc_address(kernel32, "GetStdHandle")
+	// 	check(GetStdHandle_from_dll != nil)
 		
-		global := value_global(program, descriptor_pointer_to(GetStdHandle_value.descriptor))
+	// 	global := value_global(program, descriptor_pointer_to(GetStdHandle_value.descriptor))
 		
-		address := cast(^fn_opaque)uintptr(global.operand.imm64)
-		address^ = cast(fn_opaque)GetStdHandle_from_dll
+	// 	address := cast(^fn_opaque)uintptr(global.operand.imm64)
+	// 	address^ = cast(fn_opaque)GetStdHandle_from_dll
 		
-		import_ := program_find_import(program,
-		                               GetStdHandle_value.operand.import_.library_name,
-		                               GetStdHandle_value.operand.import_.symbol_name)
-		check(import_ != nil)
-		// FIXME make sure it fits into u32
-		import_.iat_rva = u32(uintptr(rawptr(address)) - uintptr(&program.data_buffer.memory[0]))
+	// 	import_ := program_find_import(program,
+	// 	                               GetStdHandle_value.operand.import_.library_name,
+	// 	                               GetStdHandle_value.operand.import_.symbol_name)
+	// 	check(import_ != nil)
+	// 	// FIXME make sure it fits into u32
+	// 	import_.iat_rva = u32(uintptr(rawptr(address)) - uintptr(&program.data_buffer.memory[0]))
 		
-		checker_value, f := Function()
-		{
-			Return(Call(GetStdHandle_value, value_from_i32(win32.STD_INPUT_HANDLE)))
-		}
-		End_Function()
-		program_end(&test_program)
+	// 	checker_value, f := Function()
+	// 	{
+	// 		Return(Call(GetStdHandle_value, value_from_i32(win32.STD_INPUT_HANDLE)))
+	// 	}
+	// 	End_Function()
+	// 	program_end(&test_program)
 		
-		check(value_as_function(checker_value, fn_void_to_i64)() == i64(uintptr(win32.get_std_handle(win32.STD_INPUT_HANDLE))))
-	})
+	// 	check(value_as_function(checker_value, fn_void_to_i64)() == i64(uintptr(win32.get_std_handle(win32.STD_INPUT_HANDLE))))
+	// })
 	
 	it("should be able to call puts() say 'Hello, world!'", proc()
 	{

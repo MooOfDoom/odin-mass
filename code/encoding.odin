@@ -45,7 +45,7 @@ encode_instruction :: proc(buffer: ^Buffer, builder: ^Function_Builder, instruct
 		{
 			operand_encoding := &encoding.operands[operand_index]
 			operand          := &instruction.operands[operand_index]
-			if operand.byte_size != i32(operand_encoding.size)
+			if operand_encoding.size != .Size_Any && operand.byte_size != i32(operand_encoding.size)
 			{
 				continue encoding_loop
 			}
@@ -235,8 +235,7 @@ encode_instruction :: proc(buffer: ^Buffer, builder: ^Function_Builder, instruct
 				if operand.type == .RIP_Relative_Import
 				{
 					program              := builder.program
-					code_base_rva        := program.code_base_rva
-					next_instruction_rva := i64(code_base_rva) + i64(buffer.occupied) + size_of(i32)
+					next_instruction_rva := i64(program.code_base_rva) + i64(buffer.occupied) + size_of(i32)
 					
 					lib_loop: for lib in &program.import_libraries
 					{
@@ -261,10 +260,13 @@ encode_instruction :: proc(buffer: ^Buffer, builder: ^Function_Builder, instruct
 				}
 				else if operand.type == .RIP_Relative
 				{
-					start_address            := i64(uintptr(&buffer.memory[0]))
-					next_instruction_address := start_address + i64(buffer.occupied) + size_of(i32)
+					program              := builder.program
+					next_instruction_rva := i64(program.code_base_rva) + i64(buffer.occupied) + size_of(i32)
+					// start_address            := i64(uintptr(&buffer.memory[0]))
+					// next_instruction_address := start_address + i64(buffer.occupied) + size_of(i32)
 					
-					diff := operand.imm64 - next_instruction_address
+					operand_rva := program.data_base_rva + i64(operand.rip_offset_in_data)
+					diff := operand_rva - next_instruction_rva
 					assert(fits_into_i32(diff), "RIP relative address too distant")
 					displacement := i32(diff)
 					

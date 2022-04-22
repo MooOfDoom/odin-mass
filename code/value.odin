@@ -61,13 +61,14 @@ Operand :: struct
 	byte_size: i32,
 	using data: struct #raw_union
 	{
-		reg:      Register,
-		imm8:     i8,
-		imm32:    i32,
-		imm64:    i64,
-		label32:  ^Label,
-		indirect: Operand_Memory_Indirect,
-		import_:  Operand_RIP_Relative_Import,
+		reg:                Register,
+		imm8:               i8,
+		imm32:              i32,
+		imm64:              i64,
+		label32:            ^Label,
+		indirect:           Operand_Memory_Indirect,
+		rip_offset_in_data: int,
+		import_:            Operand_RIP_Relative_Import,
 	},
 }
 
@@ -225,6 +226,7 @@ print_operand :: proc(operand: ^Operand)
 		}
 		case .RIP_Relative:
 		{
+			// FIXME calculate this offset
 			fmt.printf("rip_to(0x%016x)", operand.imm64)
 		}
 		case .RIP_Relative_Import:
@@ -263,7 +265,8 @@ Program :: struct
 	import_libraries:      [dynamic]Import_Library,
 	entry_point:           ^Function_Builder,
 	functions:             [dynamic]Function_Builder,
-	code_base_rva:         i32,
+	code_base_rva:         i64,
+	data_base_rva:         i64,
 }
 
 Jit_Program :: struct
@@ -496,7 +499,7 @@ value_global :: proc(program: ^Program, descriptor: ^Descriptor) -> ^Value
 		{
 			type      = .RIP_Relative,
 			byte_size = byte_size,
-			data      = {imm64 = i64(uintptr(address))},
+			data      = {rip_offset_in_data = program.data_buffer.occupied - int(byte_size)},
 		},
 	})
 	return result
@@ -538,6 +541,11 @@ same_type :: proc(a: ^Descriptor, b: ^Descriptor) -> bool
 			}
 			if (b.pointer_to.type == .Fixed_Size_Array &&
 			    same_type(b.pointer_to.array.item, a.pointer_to))
+			{
+				return true
+			}
+			if (a.pointer_to.type == .Void ||
+			    b.pointer_to.type == .Void)
 			{
 				return true
 			}
@@ -651,6 +659,43 @@ value_as_function :: proc(value: ^Value, $T: typeid) -> T
 	return T(value.operand.label32.target)
 }
 
+fn_value_for_argument_index :: proc(arg_descriptor: ^Descriptor, argument_index: int) -> ^Value
+{
+	byte_size := descriptor_byte_size(arg_descriptor)
+	assert(byte_size <= 8, "Arg byte size <= 8")
+	switch argument_index
+	{
+		case 0:
+		{
+			return value_register_for_descriptor(.C, arg_descriptor)
+		}
+		case 1:
+		{
+			return value_register_for_descriptor(.D, arg_descriptor)
+		}
+		case 2:
+		{
+			return value_register_for_descriptor(.R8, arg_descriptor)
+		}
+		case 3:
+		{
+			return value_register_for_descriptor(.R9, arg_descriptor)
+		}
+		case:
+		{
+			// @Volatile @StackPatch
+			offset  := i32(argument_index * size_of(i64))
+			operand := stack(offset, byte_size)
+			
+			return  new_clone(Value \
+			{
+				descriptor = arg_descriptor,
+				operand    = operand,
+			})
+		}
+	}
+}
+
 parse_odin_type :: proc(range: string) -> (^Descriptor, int)
 {
 	descriptor: ^Descriptor
@@ -724,7 +769,9 @@ parse_odin_type :: proc(range: string) -> (^Descriptor, int)
 			}
 			else if type == "rawptr"
 			{
-				inner_descriptor^ = &descriptor_i64
+				inner_descriptor^ = new(Descriptor)
+				inner_descriptor^.type = .Pointer
+				inner_descriptor^.pointer_to = &descriptor_void
 			}
 			else if type == "cstring"
 			{
@@ -761,6 +808,7 @@ parse_odin_type :: proc(range: string) -> (^Descriptor, int)
 		}
 	}
 	
+	type_end = min(type_end + 1, len(range))
 	return descriptor, type_end
 }
 
@@ -789,6 +837,7 @@ odin_function_descriptor :: proc(forward_declaration: string) -> ^Descriptor
 {
 	result := new_clone(Descriptor{type = .Function})
 	
+	result.function.arguments = make([dynamic]Value, 0, 16)
 	result.function.returns = odin_function_return_value(forward_declaration)
 	
 	start := strings.index_byte(forward_declaration, '(')
@@ -796,7 +845,6 @@ odin_function_descriptor :: proc(forward_declaration: string) -> ^Descriptor
 	end := strings.index_byte(forward_declaration, ')')
 	assert(end != -1)
 	arg_decls := forward_declaration[start + 1:end]
-	arg_index := 0
 	for arg_decls != ""
 	{
 		arg_desc, length := parse_odin_type(arg_decls)
@@ -807,14 +855,12 @@ odin_function_descriptor :: proc(forward_declaration: string) -> ^Descriptor
 		arg_decls = arg_decls[length:]
 		if arg_desc != nil
 		{
-			append(&result.function.arguments, Value \
-			{
-				descriptor = arg_desc,
-				operand = {type = .Register, byte_size = descriptor_byte_size(arg_desc), data = {reg = .C}}, // FIXME should not use a hardcoded register here
-			})
-			arg_index += 1
+			append(&result.function.arguments, fn_value_for_argument_index(arg_desc, len(result.function.arguments))^)
 		}
 	}
+	
+	// fmt.println(forward_declaration)
+	// fmt.println(result.function.arguments)
 	
 	return result
 }

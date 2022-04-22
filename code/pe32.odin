@@ -41,6 +41,8 @@ encode_rdata_section :: proc(program: ^Program, header: ^IMAGE_SECTION_HEADER) -
 		return u32(buffer.occupied) + header.VirtualAddress
 	}
 	
+	program.data_base_rva = i64(header.VirtualAddress)
+	
 	expected_encoded_size: int
 	for lib in &program.import_libraries
 	{
@@ -62,18 +64,21 @@ encode_rdata_section :: proc(program: ^Program, header: ^IMAGE_SECTION_HEADER) -
 				// Image Thunk
 				expected_encoded_size += size_of(u64)
 			}
-			{
-				// Import Directory
-				expected_encoded_size += size_of(IMAGE_IMPORT_DESCRIPTOR)
-			}
 		}
 		// IAT zero termination
 		expected_encoded_size += size_of(u64)
 		// Image Thunk zero termination
 		expected_encoded_size += size_of(u64)
+		{
+			// Import Directory
+			expected_encoded_size += size_of(IMAGE_IMPORT_DESCRIPTOR)
+		}
 	}
 	// Import Directory zero termination
 	expected_encoded_size += size_of(IMAGE_IMPORT_DESCRIPTOR)
+	
+	global_data_size := align(program.data_buffer.occupied, 16)
+	expected_encoded_size += global_data_size
 	
 	result: Encoded_Rdata_Section =
 	{
@@ -81,6 +86,9 @@ encode_rdata_section :: proc(program: ^Program, header: ^IMAGE_SECTION_HEADER) -
 	}
 	
 	buffer := &result.buffer
+	
+	global_data := buffer_allocate_size(buffer, global_data_size)
+	copy(global_data, program.data_buffer.memory[:program.data_buffer.occupied])
 	
 	// Function Names
 	for lib in &program.import_libraries
@@ -181,7 +189,7 @@ encode_text_section :: proc(program: ^Program, header: ^IMAGE_SECTION_HEADER) ->
 	
 	buffer := &result.buffer
 	
-	program.code_base_rva = i32(header.VirtualAddress)
+	program.code_base_rva = i64(header.VirtualAddress)
 	
 	for function in &program.functions
 	{
@@ -199,7 +207,7 @@ encode_text_section :: proc(program: ^Program, header: ^IMAGE_SECTION_HEADER) ->
 	return result
 }
 
-write_executable :: proc(program: ^Program)
+write_executable :: proc(file_path: cstring, program: ^Program)
 {
 	short_name :: proc(name: string) -> [IMAGE_SIZEOF_SHORT_NAME]byte
 	{
@@ -335,7 +343,7 @@ write_executable :: proc(program: ^Program)
 	
 	////////
 	
-	file := win32.create_file_a("build\\test.exe",           // name of the write
+	file := win32.create_file_a(file_path        ,           // name of the write
 	                            win32.FILE_GENERIC_WRITE,    // open for writing
 	                            0,                           // do not share
 	                            nil,                         // default security

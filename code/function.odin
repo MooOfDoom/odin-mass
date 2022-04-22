@@ -160,6 +160,8 @@ fn_end :: proc(builder: ^Function_Builder, loc := #caller_location)
 
 fn_encode :: proc(buffer: ^Buffer, builder: ^Function_Builder, loc := #caller_location)
 {
+	code_start := buffer.occupied
+	
 	encode_instruction(buffer, builder, {maybe_label = builder.prolog_label, loc = loc})
 	encode_instruction(buffer, builder, {sub, {rsp, imm_auto(builder.stack_reserve), {}}, nil, loc});
 	
@@ -174,6 +176,8 @@ fn_encode :: proc(buffer: ^Buffer, builder: ^Function_Builder, loc := #caller_lo
 	encode_instruction(buffer, builder, {ret, {}, nil, loc})
 	// FIXME add encoding
 	// buffer_append_u8(buffer, 0xcc) // int3
+	
+	if DEBUG_PRINT do print_buffer(buffer.memory[code_start:buffer.occupied])
 	
 	delete(builder.instructions)
 }
@@ -190,17 +194,16 @@ program_end :: proc(program: ^Program, loc := #caller_location) -> Jit_Program
 	{
 		fmt.println(result.code_buffer)
 	}
-	diff := i64(uintptr(&result.code_buffer.memory[0]) - uintptr(&result.data_buffer.memory[0]))
-	assert(fits_into_i32(diff), "Code and data buffers too far apart")
-	program.code_base_rva = i32(diff)
+	// diff := i64(uintptr(&result.code_buffer.memory[0]) - uintptr(&result.data_buffer.memory[0]))
+	// assert(fits_into_i32(diff), "Code and data buffers too far apart")
+	// program.code_base_rva = i32(diff)
+	program.code_base_rva = i64(uintptr(&result.code_buffer.memory[0]))
+	program.data_base_rva = i64(uintptr(&result.data_buffer.memory[0]))
 	
 	for builder in &program.functions
 	{
 		fn_encode(&result.code_buffer, &builder, loc)
 	}
-	// fmt.printf("\n!!!!!! reserved: %v, occupied: %v\n", code_buffer_size, result.code_buffer.occupied)
-	
-	if DEBUG_PRINT do print_buffer(result.code_buffer.memory[:result.code_buffer.occupied])
 	
 	return result
 }
@@ -210,38 +213,9 @@ fn_arg :: proc(builder: ^Function_Builder, descriptor: ^Descriptor) -> ^Value
 	byte_size := descriptor_byte_size(descriptor)
 	assert(byte_size <= 8, "Arg byte size <= 8")
 	argument_index := len(builder.result.descriptor.function.arguments)
-	switch argument_index
-	{
-		case 0:
-		{
-			append(&builder.result.descriptor.function.arguments, value_register_for_descriptor(.C, descriptor)^)
-		}
-		case 1:
-		{
-			append(&builder.result.descriptor.function.arguments, value_register_for_descriptor(.D, descriptor)^)
-		}
-		case 2:
-		{
-			append(&builder.result.descriptor.function.arguments, value_register_for_descriptor(.R8, descriptor)^)
-		}
-		case 3:
-		{
-			append(&builder.result.descriptor.function.arguments, value_register_for_descriptor(.R9, descriptor)^)
-		}
-		case:
-		{
-			// @Volatile @StackPatch
-			offset  := i32(argument_index * size_of(i64))
-			operand := stack(offset, byte_size)
-			
-			append(&builder.result.descriptor.function.arguments, Value \
-			{
-				descriptor = descriptor,
-				operand    = operand,
-			})
-		}
-	}
-	return &builder.result.descriptor.function.arguments[argument_index] // NOTE(Lothar): Danger! Pointing into dynamic array!
+	result := fn_value_for_argument_index(descriptor, argument_index)
+	append(&builder.result.descriptor.function.arguments, result^)
+	return result
 }
 
 fn_return :: proc(builder: ^Function_Builder, to_return: ^Value, loc := #caller_location)
@@ -549,6 +523,7 @@ call_function_value :: proc(builder: ^Function_Builder, to_call: ^Value, args: .
 	assert(to_call.descriptor.type == .Function, "Value to call must be a function")
 	overload_loop: for overload := to_call; overload != nil; overload = overload.descriptor.function.next_overload
 	{
+		if len(args) != len(overload.descriptor.function.arguments) do continue
 		for arg, i in args
 		{
 			if !same_value_type(&overload.descriptor.function.arguments[i], arg)

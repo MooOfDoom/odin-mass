@@ -21,10 +21,11 @@ Operand_Encoding_Type :: enum
 
 Operand_Size :: enum
 {
-	Size_8  = 1,
-	Size_16 = 2,
-	Size_32 = 4,
-	Size_64 = 8,
+	Size_Any = 0,
+	Size_8   = 1,
+	Size_16  = 2,
+	Size_32  = 4,
+	Size_64  = 8,
 }
 
 Operand_Encoding :: struct
@@ -78,6 +79,7 @@ Instruction_Extension :: struct
 @(private="file") r_m32  :: Operand_Encoding{.Register_Memory, .Size_32}
 @(private="file") r_m64  :: Operand_Encoding{.Register_Memory, .Size_64}
 
+@(private="file") m      :: Operand_Encoding{.Memory, .Size_Any}
 @(private="file") m_8    :: Operand_Encoding{.Memory, .Size_8}
 @(private="file") m_16   :: Operand_Encoding{.Memory, .Size_16}
 @(private="file") m_32   :: Operand_Encoding{.Memory, .Size_32}
@@ -136,10 +138,7 @@ mov := X64_Mnemonic{name = "mov", encoding_list = mov_encoding_list[:]}
 ////////////////////////////////////////////////////////////////////////////////
 lea_encoding_list := [?]Instruction_Encoding \
 {
-	encoding(0x8d, _r, r_64, m_8),
-	encoding(0x8d, _r, r_64, m_16),
-	encoding(0x8d, _r, r_64, m_32),
-	encoding(0x8d, _r, r_64, m_64),
+	encoding(0x8d, _r, r_64, m),
 }
 lea := X64_Mnemonic{name = "lea", encoding_list = lea_encoding_list[:]}
 
