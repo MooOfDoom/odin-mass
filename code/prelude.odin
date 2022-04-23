@@ -7,6 +7,9 @@ import "core:runtime"
 import "core:strings"
 import "core:sys/win32"
 
+PAGE_READWRITE         :: win32.PAGE_READWRITE
+PAGE_EXECUTE_READWRITE :: win32.PAGE_EXECUTE_READWRITE
+
 fn_opaque                         :: distinct rawptr
 fn_void_to_void                   :: #type proc "c" ()
 fn_void_to_i32                    :: #type proc "c" () -> i32

@@ -35,7 +35,7 @@ function_spec :: proc()
 {
 	spec("function")
 	
-	temp_buffer := make_buffer(1024 * 1024, win32.PAGE_READWRITE)
+	temp_buffer := make_buffer(1024 * 1024, PAGE_READWRITE)
 	context.allocator = buffer_allocator(&temp_buffer)
 	
 	fn_context: Function_Context
@@ -46,7 +46,7 @@ function_spec :: proc()
 		free_all()
 		test_program =
 		{
-			data_buffer      = make_buffer(128 * 1024, win32.PAGE_READWRITE),
+			data_buffer      = make_buffer(128 * 1024, PAGE_READWRITE),
 			import_libraries = make([dynamic]Import_Library, 0, 16),
 			functions        = make([dynamic]Function_Builder, 0, 16),
 		}

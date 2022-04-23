@@ -180,7 +180,7 @@ program_end :: proc(program: ^Program, loc := #caller_location) -> Jit_Program
 	code_buffer_size := estimate_max_code_size_in_bytes(program)
 	result: Jit_Program =
 	{
-		code_buffer = make_buffer(code_buffer_size, win32.PAGE_EXECUTE_READWRITE),
+		code_buffer = make_buffer(code_buffer_size, PAGE_EXECUTE_READWRITE),
 		data_buffer = program.data_buffer,
 	}
 	program.code_base_rva = i64(uintptr(&result.code_buffer.memory[0]))

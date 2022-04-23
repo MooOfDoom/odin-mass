@@ -2,7 +2,6 @@ package main
 
 import "core:fmt"
 import "core:mem"
-import "core:sys/win32"
 
 DEBUG_PRINT :: true
 
@@ -220,7 +219,7 @@ mass_spec :: proc()
 {
 	spec("mass")
 	
-	temp_buffer := make_buffer(1024 * 1024, win32.PAGE_READWRITE)
+	temp_buffer := make_buffer(1024 * 1024, PAGE_READWRITE)
 	context.allocator = buffer_allocator(&temp_buffer)
 	
 	fn_context: Function_Context
@@ -231,7 +230,7 @@ mass_spec :: proc()
 		free_all()
 		test_program =
 		{
-			data_buffer      = make_buffer(128 * 1024, win32.PAGE_READWRITE),
+			data_buffer      = make_buffer(128 * 1024, PAGE_READWRITE),
 			import_libraries = make([dynamic]Import_Library, 0, 16),
 			functions        = make([dynamic]Function_Builder, 0, 16),
 		}
@@ -585,6 +584,7 @@ main :: proc()
 {
 	mass_spec()
 	function_spec()
+	source_spec()
 	
 	print_test_results()
 }
