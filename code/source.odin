@@ -4,6 +4,7 @@ import "core:fmt"
 import "core:mem"
 import "core:strings"
 import "core:unicode"
+import "core:unicode/utf8"
 
 Token_Type :: enum
 {
@@ -23,6 +24,8 @@ Tokenizer_State :: enum
 	Integer,
 	Operator,
 	Id,
+	String,
+	Single_Line_Comment,
 }
 
 Token :: struct
@@ -36,15 +39,50 @@ Token :: struct
 	},
 }
 
-update_token_source :: proc(token: ^Token, source: string, byte_index: int)
+code_point_is_operator :: proc(code_point: rune) -> bool
 {
-	// TODO(Lothar): This is very awkward. Find a better way to do this!
-	length := int(uintptr(raw_data(source))) + byte_index - int(uintptr(raw_data(token.source)))
-	(cast(^mem.Raw_String)&token.source).len = length
+	switch code_point
+	{
+		case '+', '-', '=', '!', '@', '%', '^', '&',
+		     '*', '/', ':', ';', ',', '?', '|', '~',
+		     '>', '<':
+		{
+			return true
+		}
+		case:
+		{
+			return false
+		}
+	}
 }
 
 tokenize :: proc(source: string) -> ^Token
 {
+	start_token :: proc(type: Token_Type, parent: ^Token, source: string, i: int) -> ^Token
+	{
+		return new_clone(Token \
+		{
+			type = type,
+			parent = parent,
+			source = source[i:i+1],
+		})
+	}
+	
+	update_token_source :: proc(token: ^Token, source: string, byte_index: int)
+	{
+		// TODO(Lothar): This is a bit awkward. Find a better way to do this!
+		length := mem.ptr_sub(mem.ptr_offset(raw_data(source), byte_index), raw_data(token.source))
+		(cast(^mem.Raw_String)&token.source).len = length
+	}
+	
+	end_token :: proc(token: ^^Token, parent: ^Token, source: string, i: int, state: ^Tokenizer_State)
+	{
+		update_token_source(token^, source, i)
+		append(&parent.children, token^)
+		token^ = nil
+		state^ = .Default
+	}
+	
 	root := new_clone(Token \
 	{
 		parent = nil,
@@ -57,134 +95,131 @@ tokenize :: proc(source: string) -> ^Token
 	current_token: ^Token
 	parent := root
 	
-	for ch, i in source
+	// fmt.println(source)
+	
+	next_i := 0
+	source_loop: for i := 0; i < len(source); i = next_i
 	{
+		ch, ch_size := utf8.decode_rune_in_string(source[i:])
+		next_i = i + ch_size
+		peek, peek_size := utf8.decode_rune_in_string(source[next_i:])
+		
 		// fmt.println(state, i, "'", ch, "'")
 		
-		if ch == ')'
+		retry: for
 		{
-			assert(parent != nil, "Found ')' without parent")
-			assert(parent.type == .Paren, "Found ')' with mismatched parent")
-			if current_token != nil
+			switch state
 			{
-				update_token_source(current_token, source, i)
-				append(&parent.children, current_token)
-				current_token = nil
-			}
-			update_token_source(parent, source, i + 1)
-			append(&parent.parent.children, parent)
-			parent = parent.parent
-			state = .Default
-			continue
-		}
-		
-		switch state
-		{
-			case .Default:
-			{
-				if unicode.is_space(ch) do continue
-				if unicode.is_digit(ch)
+				case .Default:
 				{
-					current_token = new_clone(Token \
+					if unicode.is_space(ch) do continue source_loop
+					if unicode.is_digit(ch)
 					{
-						type   = .Integer,
-						parent = parent,
-						source = source[i:i+1],
-					})
-					state = .Integer
-				}
-				else if unicode.is_alpha(ch)
-				{
-					current_token = new_clone(Token \
+						current_token = start_token(.Integer, parent, source, i)
+						state = .Integer
+					}
+					else if unicode.is_alpha(ch)
 					{
-						type   = .Id,
-						parent = parent,
-						source = source[i:i+1],
-					})
-					state = .Id
-				}
-				else if ch == '+'
-				{
-					current_token = new_clone(Token \
+						current_token = start_token(.Id, parent, source, i)
+						state = .Id
+					}
+					else if ch == '/' && peek == '/'
 					{
-						type   = .Operator,
-						parent = parent,
-						source = source[i:i+1],
-					})
-					state = .Operator
-				}
-				else if ch == '('
-				{
-					parent = new_clone(Token \
+						state = .Single_Line_Comment
+					}
+					else if code_point_is_operator(ch)
 					{
-						type   = .Paren,
-						parent = parent,
-						source = source[i:i+1],
-						data = {children = make([dynamic]^Token, 0, 4)},
-					})
+						current_token = start_token(.Operator, parent, source, i)
+						state = .Operator
+					}
+					else if ch == '"'
+					{
+						current_token = start_token(.String, parent, source, i)
+						state = .String
+					}
+					else if ch == '(' || ch == '{' || ch == '['
+					{
+						type: Token_Type =
+							ch == '(' ? .Paren :
+							ch == '{' ? .Curly :
+							.Square
+						parent = start_token(type, parent, source, i)
+						parent.children = make([dynamic]^Token, 0, 4)
+					}
+					else if ch == ')' || ch == '}' || ch == ']'
+					{
+						type: Token_Type =
+							ch == ')' ? .Paren :
+							ch == '}' ? .Curly :
+							.Square
+						assert(parent != nil, "Found closing bracket without parent")
+						assert(parent.type == type, "Found closing bracket with mismatched parent")
+						if current_token != nil
+						{
+							end_token(&current_token, parent, source, i, &state)
+						}
+						current_token = parent
+						parent        = current_token.parent
+						end_token(&current_token, parent, source, i + ch_size, &state)
+					}
+					else
+					{
+						assert(false, "Unable to tokenize input")
+					}
 				}
-				else
+				case .Integer:
 				{
-					assert(false, "Unable to tokenize input")
+					if !unicode.is_digit(ch)
+					{
+						end_token(&current_token, parent, source, i, &state)
+						continue retry
+					}
+				}
+				case .Id:
+				{
+					if !(unicode.is_alpha(ch) || unicode.is_digit(ch))
+					{
+						end_token(&current_token, parent, source, i, &state)
+						continue retry
+					}
+				}
+				case .Operator:
+				{
+					end_token(&current_token, parent, source, i, &state)
+					continue retry
+				}
+				case .String:
+				{
+					if ch == '"'
+					{
+						end_token(&current_token, parent, source, i + ch_size, &state)
+					}
+				}
+				case .Single_Line_Comment:
+				{
+					if ch == '\r'
+					{
+						state = .Default
+						if peek == '\n'
+						{
+							next_i += peek_size
+						}
+					}
+					if ch == '\n'
+					{
+						state = .Default
+					}
 				}
 			}
-			case .Integer:
-			{
-				if unicode.is_space(ch)
-				{
-					update_token_source(current_token, source, i)
-					append(&parent.children, current_token)
-					current_token = nil
-					state = .Default
-				}
-				else if unicode.is_digit(ch)
-				{
-					// nothing to do
-				}
-				else
-				{
-					assert(false, "Unable to tokenize input")
-				}
-			}
-			case .Id:
-			{
-				if unicode.is_space(ch)
-				{
-					update_token_source(current_token, source, i)
-					append(&parent.children, current_token)
-					current_token = nil
-					state = .Default
-				}
-				else if unicode.is_alpha(ch) || unicode.is_digit(ch)
-				{
-					// nothing to do
-				}
-				else
-				{
-					assert(false, "Unable to tokenize input")
-				}
-			}
-			case .Operator:
-			{
-				if unicode.is_space(ch)
-				{
-					update_token_source(current_token, source, i)
-					append(&parent.children, current_token)
-					current_token = nil
-					state = .Default
-				}
-				else
-				{
-					assert(false, "Unable to tokenize input")
-				}
-			}
+			break
 		}
 	}
 	
-	assert(parent == root)
+	assert(parent == root, "Unexpected EOF while tokenizing")
 	// current_token can be null in case of an empty input
 	if current_token != nil
 	{
+		assert(state != .String, "Strings need to be terminated with a '\"'")
 		update_token_source(current_token, source, len(source))
 		append(&root.children, current_token)
 	}

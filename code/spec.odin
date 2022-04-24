@@ -582,8 +582,8 @@ test :: proc "c" () -> Point
 
 main :: proc()
 {
-	mass_spec()
-	function_spec()
+	// mass_spec()
+	// function_spec()
 	source_spec()
 	
 	print_test_results()

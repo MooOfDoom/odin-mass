@@ -24,6 +24,16 @@ source_spec :: proc()
 		check(len(root.children) == 0)
 	})
 	
+	it("should be able to tokenize a comment", proc()
+	{
+		source := "// foo\n"
+		root := tokenize(source)
+		check(root != nil)
+		check(root.parent == nil)
+		check(root.type == .Module)
+		check(len(root.children) == 0)
+	})
+	
 	it("should be able to tokenize a sum of integers", proc()
 	{
 		source := "12 + foo123"
@@ -65,21 +75,49 @@ source_spec :: proc()
 		check(id.source == "x")
 	})
 	
-	it("should be able to tokenize complex expressions", proc()
+	it("should be able to tokenize strings", proc()
 	{
-		source := "(42 + (foo + 123 + 1423))"
+		source := `"foo 123"`
 		root := tokenize(source)
 		check(root != nil)
 		check(root.type == .Module)
 		check(len(root.children) == 1)
 		check(root.source == source)
 		
-		paren := root.children[0]
-		check(paren.type == .Paren)
-		check(len(paren.children) == 3)
+		str := root.children[0]
+		check(str.type == .String)
+		check(str.source == source)
+	})
+	
+	it("should be able to tokenize nested groups with different braces", proc()
+	{
+		source := "{[]}"
+		root := tokenize(source)
+		check(root != nil)
+		check(root.type == .Module)
+		check(len(root.children) == 1)
+		check(root.source == source)
 		
-		nexted_paren := paren.children[2]
-		check(nexted_paren.type == .Paren)
-		check(len(nexted_paren.children) == 5)
+		curly := root.children[0]
+		check(curly.type == .Curly)
+		check(len(curly.children) == 1)
+		check(curly.source == "{[]}")
+		
+		square := curly.children[0]
+		check(square.type == .Square)
+		check(len(square.children) == 0)
+		check(square.source == "[]")
+	})
+	
+	it("should be able to tokenize complex expressions", proc()
+	{
+		source :=
+`foo :: (x: s8) -> {
+	return x + 3;
+}`
+		root := tokenize(source)
+		check(root != nil)
+		check(root.type == .Module)
+		check(root.source == source)
 	})
 }
