@@ -17,7 +17,9 @@ source_spec :: proc()
 	it("should be able to tokenize an empty string", proc()
 	{
 		source := ""
-		root := tokenize(source)
+		result := tokenize("_test_.mass", source)
+		check(result.type == .Success)
+		root := result.root
 		check(root != nil)
 		check(root.parent == nil)
 		check(root.type == .Module)
@@ -27,7 +29,9 @@ source_spec :: proc()
 	it("should be able to tokenize a comment", proc()
 	{
 		source := "// foo\n"
-		root := tokenize(source)
+		result := tokenize("_test_.mass", source)
+		check(result.type == .Success)
+		root := result.root
 		check(root != nil)
 		check(root.parent == nil)
 		check(root.type == .Module)
@@ -37,7 +41,9 @@ source_spec :: proc()
 	it("should be able to tokenize a sum of integers", proc()
 	{
 		source := "12 + foo123"
-		root := tokenize(source)
+		result := tokenize("_test_.mass", source)
+		check(result.type == .Success)
+		root := result.root
 		check(root != nil)
 		check(root.type == .Module)
 		check(len(root.children) == 3)
@@ -59,7 +65,9 @@ source_spec :: proc()
 	it("should be able to tokenize groups", proc()
 	{
 		source := "(x)"
-		root := tokenize(source)
+		result := tokenize("_test_.mass", source)
+		check(result.type == .Success)
+		root := result.root
 		check(root != nil)
 		check(root.type == .Module)
 		check(len(root.children) == 1)
@@ -78,7 +86,9 @@ source_spec :: proc()
 	it("should be able to tokenize strings", proc()
 	{
 		source := `"foo 123"`
-		root := tokenize(source)
+		result := tokenize("_test_.mass", source)
+		check(result.type == .Success)
+		root := result.root
 		check(root != nil)
 		check(root.type == .Module)
 		check(len(root.children) == 1)
@@ -92,7 +102,9 @@ source_spec :: proc()
 	it("should be able to tokenize nested groups with different braces", proc()
 	{
 		source := "{[]}"
-		root := tokenize(source)
+		result := tokenize("_test_.mass", source)
+		check(result.type == .Success)
+		root := result.root
 		check(root != nil)
 		check(root.type == .Module)
 		check(len(root.children) == 1)
@@ -115,9 +127,26 @@ source_spec :: proc()
 `foo :: (x: s8) -> {
 	return x + 3;
 }`
-		root := tokenize(source)
+		result := tokenize("_test_.mass", source)
+		check(result.type == .Success)
+		root := result.root
 		check(root != nil)
 		check(root.type == .Module)
 		check(root.source == source)
+	})
+	
+	it("should report a failure when encountering a brace that is not closed", proc()
+	{
+		source := "(foo"
+		result := tokenize("_test_.mass", source)
+		check(result.type == .Error)
+		check(len(result.errors) == 1)
+		error := result.errors[0]
+		check(error.location.filename == "_test_.mass")
+		check(error.location.line == 1)
+		check(error.location.column == 4)
+		check(error.message == "Unexpected end of file. Expected a closing brace.")
+		
+		print_message_with_location(error.message, &error.location)
 	})
 }

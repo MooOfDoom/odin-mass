@@ -19,11 +19,13 @@ GLOBAL_bdd_state: BDD_State
 
 spec :: proc(name: string)
 {
+	delete(GLOBAL_bdd_state.failed_checks)
 	fmt.println(name)
 	GLOBAL_bdd_state =
 	{
 		test_count        = GLOBAL_bdd_state.test_count,
 		failed_test_count = GLOBAL_bdd_state.failed_test_count,
+		failed_checks     = make([dynamic]runtime.Source_Code_Location, 0, 8, runtime.default_allocator()),
 	}
 }
 
@@ -54,22 +56,34 @@ it :: proc(requirement: string, test: proc())
 	if GLOBAL_bdd_state.failed_check
 	{
 		fmt.printf("(FAIL)\n")
+		src: []byte
+		ok: bool
+		lines: []string
+		current_file := ""
 		for loc in GLOBAL_bdd_state.failed_checks
 		{
 			fmt.printf("    Check failed: ")
-			src, ok := os.read_entire_file(loc.file_path)
-			if ok
+			if current_file != loc.file_path
 			{
-				defer delete(src)
-				lines := strings.split(string(src), "\n")
-				defer delete(lines)
-				line := lines[loc.line - 1]
-				expr := line[loc.column + 5:len(line) - 2]
-				fmt.printf("%v\n", expr)
+				src, ok = os.read_entire_file(loc.file_path)
+				if ok
+				{
+					lines = strings.split(string(src), "\n")
+					current_file = loc.file_path
+				}
+				else
+				{
+					fmt.printf("ERROR READING SOURCE FILE\n")
+				}
 			}
+			line := lines[loc.line - 1]
+			expr := line[loc.column + 5:len(line) - 2]
+			fmt.printf("%v\n", expr)
 			fmt.printf("      at %v:%v\n", loc.file_path, loc.line)
 		}
 		GLOBAL_bdd_state.failed_test_count += 1
+		delete(lines)
+		delete(src)
 	}
 	else
 	{

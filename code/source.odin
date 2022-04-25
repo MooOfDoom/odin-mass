@@ -56,13 +56,47 @@ code_point_is_operator :: proc(code_point: rune) -> bool
 	}
 }
 
-tokenize :: proc(source: string) -> ^Token
+Source_Location :: struct
+{
+	filename: string,
+	line:     int,
+	column:   int,
+}
+
+Tokenizer_Error :: struct
+{
+	message:  string,
+	location: Source_Location,
+}
+
+Tokenizer_Result_Type :: enum
+{
+	Error,
+	Success,
+}
+
+Tokenizer_Result :: struct
+{
+	type: Tokenizer_Result_Type,
+	using data: struct #raw_union
+	{
+		root:   ^Token,
+		errors: [dynamic]Tokenizer_Error,
+	},
+}
+
+print_message_with_location :: proc(message: string, location: ^Source_Location)
+{
+	fmt.printf("%v(%v:%v): %v\n", location.filename, location.line, location.column, message)
+}
+
+tokenize :: proc(filename: string, source: string) -> Tokenizer_Result
 {
 	start_token :: proc(type: Token_Type, parent: ^Token, source: string, i: int) -> ^Token
 	{
 		return new_clone(Token \
 		{
-			type = type,
+			type   = type,
 			parent = parent,
 			source = source[i:i+1],
 		})
@@ -83,6 +117,20 @@ tokenize :: proc(source: string) -> ^Token
 		state^ = .Default
 	}
 	
+	push_error :: proc(errors: ^[dynamic]Tokenizer_Error, message: string, filename: string, line: int, column: int)
+	{
+		append(errors, Tokenizer_Error \
+		{
+			message = message,
+			location =
+			{
+				filename = filename,
+				line     = line,
+				column   = column,
+			},
+		})
+	}
+	
 	root := new_clone(Token \
 	{
 		parent = nil,
@@ -95,8 +143,12 @@ tokenize :: proc(source: string) -> ^Token
 	current_token: ^Token
 	parent := root
 	
+	errors := make([dynamic]Tokenizer_Error, 0, 8)
+	
 	// fmt.println(source)
 	
+	line   := 1
+	column := 0
 	next_i := 0
 	source_loop: for i := 0; i < len(source); i = next_i
 	{
@@ -105,6 +157,25 @@ tokenize :: proc(source: string) -> ^Token
 		peek, peek_size := utf8.decode_rune_in_string(source[next_i:])
 		
 		// fmt.println(state, i, "'", ch, "'")
+		
+		if ch == '\r'
+		{
+			if peek == '\n'
+			{
+				continue
+			}
+			ch = '\n'
+		}
+		
+		if ch == '\n'
+		{
+			line  += 1
+			column = 1
+		}
+		else
+		{
+			column += 1
+		}
 		
 		retry: for
 		{
@@ -152,8 +223,11 @@ tokenize :: proc(source: string) -> ^Token
 							ch == ')' ? .Paren :
 							ch == '}' ? .Curly :
 							.Square
-						assert(parent != nil, "Found closing bracket without parent")
-						assert(parent.type == type, "Found closing bracket with mismatched parent")
+						if parent == nil || parent.type != type
+						{
+							push_error(&errors, "Encountered a closing brace without a matching open one", filename, line, column)
+							break source_loop
+						}
 						if current_token != nil
 						{
 							end_token(&current_token, parent, source, i, &state)
@@ -164,7 +238,8 @@ tokenize :: proc(source: string) -> ^Token
 					}
 					else
 					{
-						assert(false, "Unable to tokenize input")
+						push_error(&errors, "Unexpected input", filename, line, column)
+						break source_loop
 					}
 				}
 				case .Integer:
@@ -215,14 +290,27 @@ tokenize :: proc(source: string) -> ^Token
 		}
 	}
 	
-	assert(parent == root, "Unexpected EOF while tokenizing")
+	if(parent != root)
+	{
+		push_error(&errors, "Unexpected end of file. Expected a closing brace.", filename, line, column)
+	}
 	// current_token can be null in case of an empty input
 	if current_token != nil
 	{
-		assert(state != .String, "Strings need to be terminated with a '\"'")
-		update_token_source(current_token, source, len(source))
-		append(&root.children, current_token)
+		if state == .String
+		{
+			push_error(&errors, "Unexpected end of file. Expected a \".", filename, line, column)
+		}
+		else
+		{
+			update_token_source(current_token, source, len(source))
+			append(&root.children, current_token)
+		}
 	}
 	
-	return root
+	if len(errors) > 0
+	{
+		return Tokenizer_Result{type = .Error, data = {errors = errors}}
+	}
+	return Tokenizer_Result{type = .Success, data = {root = root}}
 }
