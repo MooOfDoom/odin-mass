@@ -14,6 +14,38 @@ source_spec :: proc()
 		free_all()
 	})
 	
+	// Scope
+	it("should be able to set and lookup values", proc()
+	{
+		test := value_from_i64(42)
+		root_scope := scope_make()
+		scope_define(root_scope, "test", test)
+		check(scope_lookup(root_scope, "test") == test)
+	})
+	
+	it("should be able to lookup things from parent scopes", proc()
+	{
+		global := value_from_i64(42)
+		root_scope := scope_make()
+		scope_define(root_scope, "global", global)
+		
+		level_1_test := value_from_i64(1);
+		scope_level_1 := scope_make(root_scope)
+		scope_define(scope_level_1, "test", level_1_test)
+		
+		level_2_test := value_from_i64(1);
+		scope_level_2 := scope_make(scope_level_1)
+		scope_define(scope_level_2, "test", level_2_test)
+		
+		check(scope_lookup(scope_level_2, "global") == global)
+		check(scope_lookup(scope_level_1, "global") == global)
+		check(scope_lookup(root_scope,    "global") == global)
+		check(scope_lookup(scope_level_2, "test")   == level_2_test)
+		check(scope_lookup(scope_level_1, "test")   == level_1_test)
+		check(scope_lookup(root_scope,    "test")   == nil)
+	})
+	
+	// Tokenizer
 	it("should be able to tokenize an empty string", proc()
 	{
 		source := ""
@@ -125,7 +157,7 @@ source_spec :: proc()
 	{
 		source :=
 `foo :: (x: s8) -> {
-	return x + 3;
+return x + 3;
 }`
 		result := tokenize("_test_.mass", source)
 		check(result.type == .Success)

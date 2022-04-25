@@ -361,18 +361,6 @@ Token_Match_Function :: struct
 	value: ^Value,
 }
 
-lookup_descriptor_type :: proc(name: string) -> ^Descriptor
-{
-	switch name
-	{
-		case "s8":  return &descriptor_i8
-		case "s16": return &descriptor_i16
-		case "s32": return &descriptor_i32
-		case "s64": return &descriptor_i64
-		case: return nil
-	}
-}
-
 token_match_function_definition :: proc(state: ^Token_Matcher_State, program: ^Program) -> Token_Match_Function
 {
 	result: Token_Match_Function
@@ -424,8 +412,12 @@ token_match_function_definition :: proc(state: ^Token_Matcher_State, program: ^P
 			{
 				return_type_token := return_types.children[0]
 				assert(return_type_token.type == .Id, "Return type was not identifier")
-				descriptor := lookup_descriptor_type(return_type_token.source)
-				assert(descriptor != nil, "Return type not found during lookup")
+				type_value := scope_lookup(program.global_scope, return_type_token.source)
+				assert(type_value != nil, "Return type not found in global scope")
+				assert(type_value.descriptor.type == .Type, "Return type was not a type")
+				
+				descriptor := type_value.descriptor.type_descriptor
+				assert(descriptor != nil, "Return type somehow did not have a type_descriptor!")
 				fn_return_descriptor(builder, descriptor)
 			}
 			case 2:

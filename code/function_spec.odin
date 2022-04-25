@@ -30,6 +30,30 @@ make_add_two :: proc(type: ^Descriptor) -> ^Value
 	return addtwo
 }
 
+type_s32_descriptor: Descriptor =
+{
+	type = .Type,
+	data = {type_descriptor = &descriptor_i32},
+}
+
+type_s64_descriptor: Descriptor =
+{
+	type = .Type,
+	data = {type_descriptor = &descriptor_i64},
+}
+
+type_s32_value: Value =
+{
+	descriptor = &type_s32_descriptor,
+	operand = {type = .None},
+}
+
+type_s64_value: Value =
+{
+	descriptor = &type_s64_descriptor,
+	operand = {type = .None},
+}
+
 function_spec :: proc()
 {
 	spec("function")
@@ -47,7 +71,11 @@ function_spec :: proc()
 			data_buffer      = make_buffer(128 * 1024, PAGE_READWRITE),
 			import_libraries = make([dynamic]Import_Library, 0, 16),
 			functions        = make([dynamic]Function_Builder, 0, 16),
+			global_scope     = scope_make(),
 		}
+		
+		scope_define(test_program.global_scope, "s32", &type_s32_value)
+		scope_define(test_program.global_scope, "s64", &type_s64_value)
 		
 		// NOTE(Lothar): Need to clear the fn_context so that its dynamic arrays don't continue to point
 		// into the freed temp buffer
