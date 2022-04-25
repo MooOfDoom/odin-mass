@@ -110,7 +110,7 @@ fn_begin :: proc(program: ^Program) -> (result: ^Value, builder: ^Function_Build
 				type = .Function,
 				data = {function =
 				{
-					arguments = make([dynamic]Value, 0, 16),
+					arguments = make([dynamic]^Value, 0, 16),
 				}},
 			}),
 		}),
@@ -211,39 +211,33 @@ program_end :: proc(program: ^Program, loc := #caller_location) -> Jit_Program
 
 fn_arg :: proc(builder: ^Function_Builder, descriptor: ^Descriptor) -> ^Value
 {
-	byte_size := descriptor_byte_size(descriptor)
-	assert(byte_size <= 8, "Arg byte size <= 8")
-	argument_index := len(builder.result.descriptor.function.arguments)
-	result := fn_value_for_argument_index(descriptor, argument_index)
-	append(&builder.result.descriptor.function.arguments, result^)
-	return result
+	return function_push_argument(&builder.result.descriptor.function, descriptor)
+}
+
+fn_return_descriptor :: proc(builder: ^Function_Builder, descriptor: ^Descriptor, loc := #caller_location)
+{
+	function := &builder.result.descriptor.function
+	if function.returns != nil
+	{
+		assert(same_type(function.returns.descriptor, descriptor), "Inconsistent return types in function")
+	}
+	else
+	{
+		assert(!fn_is_frozen(builder), "Function builder was frozen during fn_return")
+		if descriptor.type != .Void
+		{
+			function.returns = value_register_for_descriptor(.A, descriptor)
+		}
+		else
+		{
+			function.returns = &void_value
+		}
+	}
 }
 
 fn_return :: proc(builder: ^Function_Builder, to_return: ^Value, loc := #caller_location)
 {
-	// We can no longer modify the return value after fn has been called
-	// or after builder has been committed through fn_end() call
-	// FIXME
-	// assert(!builder.frozen)
-	
-	// FIXME @Overloads
-	if builder.result.descriptor.function.returns != nil
-	{
-		assert(same_value_type(builder.result.descriptor.function.returns, to_return))
-	}
-	else
-	{
-		assert(!fn_is_frozen(builder))
-		if to_return.descriptor.type != .Void
-		{
-			builder.result.descriptor.function.returns = value_register_for_descriptor(.A, to_return.descriptor)
-		}
-		else
-		{
-			builder.result.descriptor.function.returns = &void_value
-		}
-	}
-	
+	fn_return_descriptor(builder, to_return.descriptor, loc)
 	if to_return.descriptor.type != .Void
 	{
 		move_value(builder, builder.result.descriptor.function.returns, to_return)
@@ -477,8 +471,8 @@ call_function_overload :: proc(builder: ^Function_Builder, to_call: ^Value, args
 	for arg, i in args
 	{
 		// FIXME add proper type checks for arguments
-		assert(same_value_type(&descriptor.arguments[i], arg), "Argument types match")
-		move_value(builder, &descriptor.arguments[i], arg)
+		assert(same_value_type(descriptor.arguments[i], arg), "Argument types match")
+		move_value(builder, descriptor.arguments[i], arg)
 	}
 	
 	// If we call a function, then we need to reserve space for the home
@@ -526,7 +520,7 @@ call_function_value :: proc(builder: ^Function_Builder, to_call: ^Value, args: .
 		if len(args) != len(overload.descriptor.function.arguments) do continue
 		for arg, i in args
 		{
-			if !same_value_type(&overload.descriptor.function.arguments[i], arg)
+			if !same_value_type(overload.descriptor.function.arguments[i], arg)
 			{
 				continue overload_loop
 			}
@@ -683,14 +677,14 @@ get_loop_stack_from_context :: proc() -> ^[dynamic]Loop_Builder
 //
 //
 
-Function :: proc(program: ^Program = nil) -> (result: ^Value, builder: ^Function_Builder)
+Function :: proc(program: ^Program = nil) -> ^Value
 {
 	program := program == nil ? &test_program : program
 	
-	result, builder = fn_begin(program)
+	result, builder := fn_begin(program)
 	(cast(^Function_Context)context.user_ptr).builder = builder
 	
-	return result, builder
+	return result
 }
 
 End_Function :: proc(loc := #caller_location)

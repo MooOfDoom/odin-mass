@@ -2,6 +2,7 @@ package main
 
 import "core:fmt"
 import "core:mem"
+import "core:strconv"
 import "core:strings"
 import "core:unicode"
 import "core:unicode/utf8"
@@ -329,4 +330,146 @@ tokenize :: proc(filename: string, source: string) -> Tokenizer_Result
 		return Tokenizer_Result{type = .Error, data = {errors = errors}}
 	}
 	return Tokenizer_Result{type = .Success, data = {root = root}}
+}
+
+Token_Matcher_State :: struct
+{
+	root:        ^Token,
+	child_index: int,
+}
+
+token_peek :: proc(state: ^Token_Matcher_State, delta: int) -> ^Token
+{
+	index := state.child_index + delta
+	if index >= len(state.root.children) do return nil
+	return state.root.children[index]
+}
+
+token_peek_match :: proc(state: ^Token_Matcher_State, delta: int, pattern_token: ^Token) -> ^Token
+{
+	source_token := token_peek(state, delta)
+	if source_token == nil                                                       do return nil
+	if pattern_token.type != nil && pattern_token.type != source_token.type      do return nil
+	if pattern_token.source != "" && pattern_token.source != source_token.source do return nil
+	return source_token
+}
+
+Token_Match_Function :: struct
+{
+	match: bool,
+	name:  string,
+	value: ^Value,
+}
+
+lookup_descriptor_type :: proc(name: string) -> ^Descriptor
+{
+	switch name
+	{
+		case "s8":  return &descriptor_i8
+		case "s16": return &descriptor_i16
+		case "s32": return &descriptor_i32
+		case "s64": return &descriptor_i64
+		case: return nil
+	}
+}
+
+token_match_function_definition :: proc(state: ^Token_Matcher_State, program: ^Program) -> Token_Match_Function
+{
+	result: Token_Match_Function
+	
+	delta := 0
+	
+	id := token_peek_match(state, delta, &Token{type = .Id})
+	delta += 1
+	if id == nil do return result
+	
+	colon_colon := token_peek_match(state, delta, &Token{type = .Operator, source = "::"})
+	delta += 1
+	if colon_colon == nil do return result
+	
+	args := token_peek_match(state, delta, &Token{type = .Paren})
+	delta += 1
+	if args == nil do return result
+	
+	arrow := token_peek_match(state, delta, &Token{type = .Operator, source = "->"})
+	delta += 1
+	if arrow == nil do return result
+	
+	return_types := token_peek_match(state, delta, &Token{type = .Paren})
+	delta += 1
+	if return_types == nil do return result
+	
+	body := token_peek_match(state, delta, &Token{type = .Curly})
+	delta += 1
+	if body == nil do return result
+	
+	result.match = true
+	result.name = id.source
+	
+	value := Function(program)
+	{
+		builder := get_builder_from_context()
+		
+		if len(args.children) != 0
+		{
+			assert(false, "Not implemented")
+		}
+		switch len(return_types.children)
+		{
+			case 0:
+			{
+				value.descriptor.function.returns = &void_value
+			}
+			case 1:
+			{
+				return_type_token := return_types.children[0]
+				assert(return_type_token.type == .Id, "Return type was not identifier")
+				descriptor := lookup_descriptor_type(return_type_token.source)
+				assert(descriptor != nil, "Return type not found during lookup")
+				fn_return_descriptor(builder, descriptor)
+			}
+			case 2:
+			{
+				assert(false, "Multiple return types are not supported at the moment")
+			}
+		}
+		fn_freeze(builder)
+		
+		body_result: ^Value
+		if len(body.children) == 1
+		{
+			expr := body.children[0]
+			if expr.type == .Integer
+			{
+				value, ok := strconv.parse_int(expr.source)
+				assert(ok, "Could not parse body as int")
+				assert(value == 42, "Value was not 42")
+				body_result = value_from_i64(i64(value))
+			}
+			else
+			{
+				assert(false, "Unexpected value")
+			}
+		}
+		
+		// Patterns in precedence order
+		// _*_
+		// _+_
+		// Integer | Paren
+		
+		//
+		// 42 + 3 * 2
+		//      _ * _
+		//
+		// 3
+		if body_result != nil
+		{
+			Return(body_result)
+		}
+	}
+	End_Function()
+	
+	result.value = value
+	
+	return result
 }

@@ -18,7 +18,7 @@ popd
 
 pushd C:\development\odin-mass
 build\mass
-rem build\test
-rem echo Exit Code: %errorlevel%
-rem build\hello_world
+build\test
+echo Exit Code: %errorlevel%
+build\hello_world
 popd

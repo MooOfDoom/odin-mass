@@ -2,15 +2,13 @@ package main
 
 import "core:fmt"
 import "core:runtime"
-import "core:strconv"
-import "core:strings"
 import "core:sys/win32"
 
 test_program: Program
 
 make_identity :: proc(type: ^Descriptor) -> ^Value
 {
-	id, f := Function()
+	id := Function()
 	{
 		x := Arg(type)
 		Return(x)
@@ -22,7 +20,7 @@ make_identity :: proc(type: ^Descriptor) -> ^Value
 
 make_add_two :: proc(type: ^Descriptor) -> ^Value
 {
-	addtwo, f := Function()
+	addtwo := Function()
 	{
 		x := Arg(type)
 		Return(Plus(x, value_from_i64(2)))
@@ -63,21 +61,48 @@ function_spec :: proc()
 		free_all()
 	})
 	
+	it("should be able to parse a void -> s64 function", proc()
+	{
+		source := `foo :: () -> (s64) { 42 }`
+		result := tokenize("_test_.mass", source)
+		check(result.type == .Success)
+		root := result.root
+		check(root != nil)
+		check(root.type == .Module)
+		
+		// print_token_tree(root)
+		
+		state: Token_Matcher_State =
+		{
+			root        = root,
+			child_index = 0,
+		}
+		match_function := token_match_function_definition(&state, &test_program)
+		check(match_function.match)
+		
+		check(match_function.name == "foo")
+		
+		program_end(&test_program)
+		
+		checker := value_as_function(match_function.value, fn_void_to_i64)
+		check(checker() == 42)
+	})
+	
 	it("should write out an executable that exits with status code 42", proc()
 	{
 		program := &test_program
 		
 		ExitProcess_value := odin_function_import(program, "kernel32.dll", `ExitProcess :: proc "std" (i32)`)
 		
-		my_exit, e := Function()
+		my_exit := Function()
 		{
 			Call(ExitProcess_value, value_from_i32(42))
 		}
 		End_Function()
 		
-		main, f := Function()
+		main := Function()
 		{
-			program.entry_point = f
+			program.entry_point = get_builder_from_context()
 			Call(my_exit)
 		}
 		End_Function()
@@ -95,9 +120,9 @@ function_spec :: proc()
 		WriteFile_value := odin_function_import(program, "kernel32.dll",
 		                                        `WriteFile :: proc "std" (i64, rawptr, i32, ^i32, i64) -> i8`)
 		
-		main, f := Function()
+		main := Function()
 		{
-			program.entry_point = f
+			program.entry_point = get_builder_from_context()
 			handle            := Call(GetStdHandle_value, STD_OUTPUT_HANDLE_value)
 			bytes_written     := Stack_i32(value_from_i32(0))
 			bytes_written_ptr := PointerTo(bytes_written)
@@ -118,7 +143,7 @@ function_spec :: proc()
 	
 	it("should support short-circuiting &&", proc()
 	{
-		checker_value, f := Function()
+		checker_value := Function()
 		{
 			number    := Arg_i32()
 			condition := Arg_i8()
@@ -139,7 +164,7 @@ function_spec :: proc()
 	
 	it("should support short-circuiting ||", proc()
 	{
-		checker_value, f := Function()
+		checker_value := Function()
 		{
 			number    := Arg_i32()
 			condition := Arg_i8()
@@ -160,7 +185,7 @@ function_spec :: proc()
 	
 	it("should support multi-way case block", proc()
 	{
-		checker_value, f := Function()
+		checker_value := Function()
 		{
 			number := Arg_i32()
 			result := Stack_i32()
@@ -199,14 +224,14 @@ function_spec :: proc()
 	
 	it("should support ad-hoc polymorphism / overloading", proc()
 	{
-		sizeof_i32, f := Function()
+		sizeof_i32 := Function()
 		{
 			_ = Arg_i32()
 			Return(value_from_i64(4))
 		}
 		End_Function()
 		
-		sizeof_i64, g := Function()
+		sizeof_i64 := Function()
 		{
 			_ = Arg_i64()
 			Return(value_from_i64(8))
@@ -216,7 +241,7 @@ function_spec :: proc()
 		sizeof_i32.descriptor.function.next_overload = sizeof_i64
 		sizeof := sizeof_i32
 		
-		checker_value, h := Function()
+		checker_value := Function()
 		{
 			x := Call(sizeof, value_from_i64(0))
 			y := Call(sizeof, value_from_i32(0))
@@ -240,7 +265,7 @@ function_spec :: proc()
 		id_i64 := make_identity(&descriptor_i64)
 		id_i32 := make_identity(&descriptor_i32)
 		addtwo_i64 := make_add_two(&descriptor_i64)
-		checker, f := Function()
+		checker := Function()
 		{
 			Call(id_i64, value_from_i64(0))
 			Call(id_i32, value_from_i32(0))
@@ -252,13 +277,13 @@ function_spec :: proc()
 	
 	it("should say functions with the same signature have the same type)", proc()
 	{
-		a, f := Function()
+		a := Function()
 		{
 			_ = Arg_i32()
 		}
 		End_Function()
 		
-		b, g := Function()
+		b := Function()
 		{
 			_ = Arg_i32()
 		}
@@ -270,26 +295,26 @@ function_spec :: proc()
 	
 	it("should say functions with the same signature have the same type)", proc()
 	{
-		a, f := Function()
+		a := Function()
 		{
 			_ = Arg_i32()
 		}
 		End_Function()
 		
-		b, g := Function()
+		b := Function()
 		{
 			_ = Arg_i32()
 			_ = Arg_i32()
 		}
 		End_Function()
 		
-		c, h := Function()
+		c := Function()
 		{
 			_ = Arg_i64()
 		}
 		End_Function()
 		
-		d, i := Function()
+		d := Function()
 		{
 			_ = Arg_i64()
 			Return(value_from_i32(0))
@@ -307,7 +332,7 @@ function_spec :: proc()
 	
 	it("should create function that will return 42", proc()
 	{
-		the_answer, f := Function()
+		the_answer := Function()
 		{
 			Return(value_from_i32(42))
 		}
@@ -320,7 +345,7 @@ function_spec :: proc()
 	
 	it("should create function that returns i64 value that was passed", proc()
 	{
-		id_i64, f := Function()
+		id_i64 := Function()
 		{
 			x := Arg_i64()
 			Return(x)
@@ -334,7 +359,7 @@ function_spec :: proc()
 	
 	it("should create function increments i32 value passed to it", proc()
 	{
-		inc_i32, f := Function()
+		inc_i32 := Function()
 		{
 			// TODO add a check that all arguments are defined before stack variables
 			x := Arg_i32()
@@ -353,7 +378,7 @@ function_spec :: proc()
 	
 	it("should have a function that returns 0 if arg is zero, 1 otherwise", proc()
 	{
-		is_non_zero_value, f := Function()
+		is_non_zero_value := Function()
 		{
 			x := Arg_i32()
 			
@@ -377,7 +402,7 @@ function_spec :: proc()
 	
 	it("should make function that multiplies by 2", proc()
 	{
-		twice, f := Function()
+		twice := Function()
 		{
 			x := Arg_i64()
 			to_return := Multiply(x, value_from_i64(2))
@@ -392,7 +417,7 @@ function_spec :: proc()
 	
 	it("should make function that divides two numbers", proc()
 	{
-		divide_fn, f := Function()
+		divide_fn := Function()
 		{
 			arg0 := Arg_i32()
 			arg1 := Arg_i32()
@@ -408,13 +433,13 @@ function_spec :: proc()
 	
 	it("should create a function to call a no argument fn", proc()
 	{
-		the_answer, f := Function()
+		the_answer := Function()
 		{
 			Return(value_from_i32(42))
 		}
 		End_Function()
 		
-		caller, g := Function()
+		caller := Function()
 		{
 			fn := Arg(the_answer.descriptor)
 			Return(Call(fn))
@@ -430,14 +455,14 @@ function_spec :: proc()
 	
 	it("should create a partially applied function", proc()
 	{
-		id_i64, f := Function()
+		id_i64 := Function()
 		{
 			x := Arg_i64()
 			Return(x)
 		}
 		End_Function()
 		
-		partial, g := Function()
+		partial := Function()
 		{
 			Return(Call(id_i64, value_from_i64(42)))
 		}
@@ -451,7 +476,7 @@ function_spec :: proc()
 	
 	it("should return 3rd argument", proc()
 	{
-		third, f := Function()
+		third := Function()
 		{
 			_ = Arg_i64()
 			_ = Arg_i64()
@@ -467,7 +492,7 @@ function_spec :: proc()
 	
 	it("should return 6th argument", proc()
 	{
-		args, f := Function()
+		args := Function()
 		{
 			_ = Arg_i64()
 			_ = Arg_i64()
@@ -486,7 +511,7 @@ function_spec :: proc()
 	
 	it("should be able to call a function with more than 4 arguments", proc()
 	{
-		args, f := Function()
+		args := Function()
 		{
 			_ = Arg_i64()
 			_ = Arg_i64()
@@ -498,7 +523,7 @@ function_spec :: proc()
 		}
 		End_Function()
 		
-		caller, g := Function()
+		caller := Function()
 		{
 			Return(Call(args,
 			            value_from_i64(10),
@@ -528,7 +553,7 @@ function_spec :: proc()
 		                                           "kernel32.dll",
 		                                           `GetStdHandle :: proc "std" (i32) -> rawptr`)
 		
-		checker_value, f := Function()
+		checker_value := Function()
 		{
 			Return(Call(GetStdHandle_value, value_from_i32(win32.STD_INPUT_HANDLE)))
 		}
@@ -550,7 +575,7 @@ function_spec :: proc()
 		
 		puts_value := odin_function_value(`puts :: proc "c" ( [^]byte )`, fn_opaque(puts))
 		
-		hello, f := Function()
+		hello := Function()
 		{
 			Call(puts_value, &message_value)
 		}
@@ -576,7 +601,7 @@ function_spec :: proc()
 		
 		hi := [?]byte{'H', 'i', '!', 0}
 		hi_i32 := transmute(i32)hi
-		hello, f := Function()
+		hello := Function()
 		{
 			message_value := Stack(&message_descriptor, value_from_i32(hi_i32))
 			Call(puts_value, PointerTo(message_value))
@@ -589,7 +614,7 @@ function_spec :: proc()
 	
 	it("should calculate Fibonacci numbers", proc()
 	{
-		fib, g := Function()
+		fib := Function()
 		{
 			n := Arg_i64()
 			If(Eq(n, value_from_i64(0)))
@@ -622,95 +647,6 @@ function_spec :: proc()
 		check(f(4) == 3)
 		check(f(5) == 5)
 		check(f(6) == 8)
-	})
-	
-	it("should be able to parse a void -> s64 function", proc()
-	{
-		fn_pattern : [dynamic]Token =
-		{
-			Token{type = .Id},
-			Token{type = .Operator, source = "::"},
-			Token{type = .Paren},
-			Token{type = .Operator, source = "->"},
-			Token{type = .Paren},
-			Token{type = .Curly},
-		}
-		
-		source := `foo :: () -> (s64) { 42 }`
-		result := tokenize("_test_.mass", source)
-		check(result.type == .Success)
-		root := result.root
-		check(root != nil)
-		check(root.type == .Module)
-		
-		// print_token_tree(root)
-		
-		for source_index in 0 ..< len(root.children)
-		{
-			source_token  := root.children[source_index]
-			pattern_token := &fn_pattern[source_index]
-			if pattern_token.type != nil && pattern_token.type != source_token.type
-			{
-				assert(false, "Mismatched pattern on type")
-			}
-			if pattern_token.source != "" && pattern_token.source != source_token.source
-			{
-				assert(false, "Mismatched pattern on source")
-			}
-		}
-		
-		match_index := 0
-		id := root.children[match_index].source
-		check(id == "foo")
-		
-		// TODO check return type
-		
-		checker_value, f := Function()
-		{
-			args := root.children[match_index + 2]
-			check(len(args.children) == 0)
-			
-			// FIXME do recursive expression matching
-			body := root.children[match_index + 5]
-			
-			body_result: ^Value
-			
-			if len(body.children) == 1
-			{
-				expr := body.children[0]
-				if expr.type == .Integer
-				{
-					value, ok := strconv.parse_int(expr.source)
-					assert(ok, "Could not parse body as int")
-					assert(value == 42, "Value was not 42")
-					body_result = value_from_i64(i64(value))
-				}
-				else
-				{
-					assert(false, "Unexpected value")
-				}
-			}
-			
-			// Patterns in precedence order
-			// _*_
-			// _+_
-			// Integer | Paren
-			
-			//
-			// 42 + 3 * 2
-			//      _ * _
-			//
-			// 3
-			if body_result != nil
-			{
-				Return(body_result)
-			}
-		}
-		End_Function()
-		program_end(&test_program)
-		
-		checker := value_as_function(checker_value, fn_void_to_i64)
-		check(checker() == 42)
 	})
 }
 

@@ -197,7 +197,7 @@ MaybeCastToTag :: proc(name: string, value: ^Value) -> ^Value
 create_is_character_in_set_checker_fn :: proc(characters: string) -> fn_type_i32_to_i8
 {
 	assert(characters != "")
-	checker, f := Function()
+	checker := Function()
 	{
 		character := Arg_i32()
 		for ch in characters
@@ -295,7 +295,7 @@ mass_spec :: proc()
 			operand = imm64(rawptr(test)),
 		}
 		
-		checker_value, f := Function()
+		checker_value := Function()
 		{
 			test_result := Call(&c_test_fn_value)
 			x := StructField(test_result, "x")
@@ -325,7 +325,7 @@ mass_spec :: proc()
 			address^ = 10
 		}
 		
-		return_42, f := Function()
+		return_42 := Function()
 		{
 			Return(Plus(global_a, global_b))
 		}
@@ -357,7 +357,7 @@ mass_spec :: proc()
 		struct_add_field(&struct_builder, &descriptor_i32, "y")
 		point_struct_descriptor := struct_end(&struct_builder)
 		
-		field_count, f := Function()
+		field_count := Function()
 		{
 			struct_ := Stack(&descriptor_struct_reflection, ReflectDescriptor(point_struct_descriptor))
 			Return(StructField(struct_, "field_count"))
@@ -401,7 +401,7 @@ mass_spec :: proc()
 			}},
 		}
 		
-		with_default_value, f := Function()
+		with_default_value := Function()
 		{
 			option_value := Arg(descriptor_pointer_to(&option_i64_descriptor))
 			default_value := Arg_i64()
@@ -485,7 +485,7 @@ mass_spec :: proc()
 		
 		size_struct_pointer_descriptor := descriptor_pointer_to(size_struct_descriptor)
 		
-		area, f := Function()
+		area := Function()
 		{
 			size_struct := Arg(size_struct_pointer_descriptor)
 			Return(Multiply(StructField(size_struct, "width"),
@@ -516,8 +516,10 @@ mass_spec :: proc()
 		
 		array_pointer_descriptor := descriptor_pointer_to(&array_descriptor)
 		
-		increment, f := Function()
+		increment := Function()
 		{
+			builder := get_builder_from_context()
+			
 			arr := Arg(array_pointer_descriptor)
 			
 			index := Stack_i32(value_from_i32(0))
@@ -538,7 +540,7 @@ mass_spec :: proc()
 				End_If()
 				
 				reg_a := value_register_for_descriptor(.A, array_pointer_descriptor)
-				move_value(f, reg_a, temp)
+				move_value(builder, reg_a, temp)
 				
 				pointer: Operand =
 				{
@@ -550,10 +552,10 @@ mass_spec :: proc()
 						displacement = 0,
 					}},
 				}
-				push_instruction(f, {inc, {pointer, {}, {}}, nil, #location()})
-				push_instruction(f, {add, {temp.operand, imm32(i32(item_byte_size)), {}}, nil, #location()})
+				push_instruction(builder, {inc, {pointer, {}, {}}, nil, #location()})
+				push_instruction(builder, {add, {temp.operand, imm32(i32(item_byte_size)), {}}, nil, #location()})
 				
-				push_instruction(f, {inc, {index.operand, {}, {}}, nil, #location()})
+				push_instruction(builder, {inc, {index.operand, {}, {}}, nil, #location()})
 				
 				Continue()
 			}
@@ -582,9 +584,9 @@ test :: proc "c" () -> Point
 
 main :: proc()
 {
-	// mass_spec()
+	mass_spec()
 	function_spec()
-	// source_spec()
+	source_spec()
 	
 	print_test_results()
 }

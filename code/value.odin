@@ -98,7 +98,7 @@ Descriptor_Fixed_Size_Array :: struct
 
 Descriptor_Function :: struct
 {
-	arguments:     [dynamic]Value,
+	arguments:     [dynamic]^Value,
 	returns:       ^Value,
 	frozen:        bool,
 	next_overload: ^Value,
@@ -588,9 +588,9 @@ same_type :: proc(a: ^Descriptor, b: ^Descriptor) -> bool
 		{
 			if !same_type(a.function.returns.descriptor, b.function.returns.descriptor) do return false
 			if len(a.function.arguments) != len(b.function.arguments) do return false
-			for arg_a, i in &a.function.arguments
+			for arg_a, i in a.function.arguments
 			{
-				arg_b := &b.function.arguments[i]
+				arg_b := b.function.arguments[i]
 				if !same_type(arg_a.descriptor, arg_b.descriptor) do return false
 			}
 			return true
@@ -684,39 +684,49 @@ value_as_function :: proc(value: ^Value, $T: typeid) -> T
 	return T(value.operand.label32.target)
 }
 
-fn_value_for_argument_index :: proc(arg_descriptor: ^Descriptor, argument_index: int) -> ^Value
+function_push_argument :: proc(function: ^Descriptor_Function, arg_descriptor: ^Descriptor) -> ^Value
 {
 	byte_size := descriptor_byte_size(arg_descriptor)
 	assert(byte_size <= 8, "Arg byte size <= 8")
-	switch argument_index
+	switch len(function.arguments)
 	{
 		case 0:
 		{
-			return value_register_for_descriptor(.C, arg_descriptor)
+			result := value_register_for_descriptor(.C, arg_descriptor)
+			append(&function.arguments, result)
+			return result
 		}
 		case 1:
 		{
-			return value_register_for_descriptor(.D, arg_descriptor)
+			result := value_register_for_descriptor(.D, arg_descriptor)
+			append(&function.arguments, result)
+			return result
 		}
 		case 2:
 		{
-			return value_register_for_descriptor(.R8, arg_descriptor)
+			result := value_register_for_descriptor(.R8, arg_descriptor)
+			append(&function.arguments, result)
+			return result
 		}
 		case 3:
 		{
-			return value_register_for_descriptor(.R9, arg_descriptor)
+			result := value_register_for_descriptor(.R9, arg_descriptor)
+			append(&function.arguments, result)
+			return result
 		}
 		case:
 		{
 			// @Volatile @StackPatch
-			offset  := i32(argument_index * size_of(i64))
+			offset  := i32(len(function.arguments) * size_of(i64))
 			operand := stack(offset, byte_size)
 			
-			return  new_clone(Value \
+			result := new_clone(Value \
 			{
 				descriptor = arg_descriptor,
 				operand    = operand,
 			})
+			append(&function.arguments, result)
+			return result
 		}
 	}
 }
@@ -862,7 +872,7 @@ odin_function_descriptor :: proc(forward_declaration: string) -> ^Descriptor
 {
 	result := new_clone(Descriptor{type = .Function})
 	
-	result.function.arguments = make([dynamic]Value, 0, 16)
+	result.function.arguments = make([dynamic]^Value, 0, 16)
 	result.function.returns = odin_function_return_value(forward_declaration)
 	
 	start := strings.index_byte(forward_declaration, '(')
@@ -880,7 +890,7 @@ odin_function_descriptor :: proc(forward_declaration: string) -> ^Descriptor
 		arg_decls = arg_decls[length:]
 		if arg_desc != nil
 		{
-			append(&result.function.arguments, fn_value_for_argument_index(arg_desc, len(result.function.arguments))^)
+			function_push_argument(&result.function, arg_desc)
 		}
 	}
 	

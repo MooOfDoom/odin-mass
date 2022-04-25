@@ -47,10 +47,6 @@ it :: proc(requirement: string, test: proc())
 	}
 	GLOBAL_bdd_state.failed_check = false
 	test()
-	if GLOBAL_bdd_state.after_each_proc != nil
-	{
-		GLOBAL_bdd_state.after_each_proc()
-	}
 	GLOBAL_bdd_state.test_count += 1
 	fmt.printf("  %v ", requirement)
 	if GLOBAL_bdd_state.failed_check
@@ -91,6 +87,10 @@ it :: proc(requirement: string, test: proc())
 		fmt.printf("(OK)\n")
 	}
 	clear(&GLOBAL_bdd_state.failed_checks)
+	if GLOBAL_bdd_state.after_each_proc != nil
+	{
+		GLOBAL_bdd_state.after_each_proc()
+	}
 }
 
 check :: proc(expression: bool, location := #caller_location)
