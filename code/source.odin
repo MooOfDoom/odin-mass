@@ -90,6 +90,19 @@ print_message_with_location :: proc(message: string, location: ^Source_Location)
 	fmt.printf("%v(%v:%v): %v\n", location.filename, location.line, location.column, message)
 }
 
+print_token_tree :: proc(token: ^Token, indent: int = 0)
+{
+	for i in 0 ..< indent
+	{
+		fmt.printf("\t")
+	}
+	fmt.printf("%v: `%v`\n", token.type, token.source)
+	for child in token.children
+	{
+		print_token_tree(child, indent + 1)
+	}
+}
+
 tokenize :: proc(filename: string, source: string) -> Tokenizer_Result
 {
 	start_token :: proc(type: Token_Type, parent: ^Token, source: string, i: int) -> ^Token
@@ -143,7 +156,7 @@ tokenize :: proc(filename: string, source: string) -> Tokenizer_Result
 	current_token: ^Token
 	parent := root
 	
-	errors := make([dynamic]Tokenizer_Error, 0, 8)
+	errors := make([dynamic]Tokenizer_Error, 0, 16)
 	
 	// fmt.println(source)
 	
@@ -260,8 +273,11 @@ tokenize :: proc(filename: string, source: string) -> Tokenizer_Result
 				}
 				case .Operator:
 				{
-					end_token(&current_token, parent, source, i, &state)
-					continue retry
+					if !code_point_is_operator(ch)
+					{
+						end_token(&current_token, parent, source, i, &state)
+						continue retry
+					}
 				}
 				case .String:
 				{

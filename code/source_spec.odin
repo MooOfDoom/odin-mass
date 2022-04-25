@@ -147,6 +147,6 @@ source_spec :: proc()
 		check(error.location.column == 4)
 		check(error.message == "Unexpected end of file. Expected a closing brace.")
 		
-		print_message_with_location(error.message, &error.location)
+		// print_message_with_location(error.message, &error.location)
 	})
 }

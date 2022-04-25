@@ -3,7 +3,7 @@ package main
 import "core:fmt"
 import "core:mem"
 
-DEBUG_PRINT :: true
+DEBUG_PRINT :: false
 
 fn_reflect :: proc(builder: ^Function_Builder, descriptor: ^Descriptor) -> ^Value
 {
@@ -227,7 +227,6 @@ mass_spec :: proc()
 	
 	before_each(proc()
 	{
-		free_all()
 		test_program =
 		{
 			data_buffer      = make_buffer(128 * 1024, PAGE_READWRITE),
@@ -244,6 +243,7 @@ mass_spec :: proc()
 	after_each(proc()
 	{
 		free_buffer(&test_program.data_buffer)
+		free_all()
 	})
 	
 	it("should have a way to create a function to check if a character is one of the provided set", proc()
@@ -583,8 +583,8 @@ test :: proc "c" () -> Point
 main :: proc()
 {
 	// mass_spec()
-	// function_spec()
-	source_spec()
+	function_spec()
+	// source_spec()
 	
 	print_test_results()
 }

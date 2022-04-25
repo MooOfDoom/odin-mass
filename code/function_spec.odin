@@ -2,6 +2,7 @@ package main
 
 import "core:fmt"
 import "core:runtime"
+import "core:strconv"
 import "core:strings"
 import "core:sys/win32"
 
@@ -43,7 +44,6 @@ function_spec :: proc()
 	
 	before_each(proc()
 	{
-		free_all()
 		test_program =
 		{
 			data_buffer      = make_buffer(128 * 1024, PAGE_READWRITE),
@@ -60,6 +60,7 @@ function_spec :: proc()
 	after_each(proc()
 	{
 		free_buffer(&test_program.data_buffer)
+		free_all()
 	})
 	
 	it("should write out an executable that exits with status code 42", proc()
@@ -621,6 +622,95 @@ function_spec :: proc()
 		check(f(4) == 3)
 		check(f(5) == 5)
 		check(f(6) == 8)
+	})
+	
+	it("should be able to parse a void -> s64 function", proc()
+	{
+		fn_pattern : [dynamic]Token =
+		{
+			Token{type = .Id},
+			Token{type = .Operator, source = "::"},
+			Token{type = .Paren},
+			Token{type = .Operator, source = "->"},
+			Token{type = .Paren},
+			Token{type = .Curly},
+		}
+		
+		source := `foo :: () -> (s64) { 42 }`
+		result := tokenize("_test_.mass", source)
+		check(result.type == .Success)
+		root := result.root
+		check(root != nil)
+		check(root.type == .Module)
+		
+		// print_token_tree(root)
+		
+		for source_index in 0 ..< len(root.children)
+		{
+			source_token  := root.children[source_index]
+			pattern_token := &fn_pattern[source_index]
+			if pattern_token.type != nil && pattern_token.type != source_token.type
+			{
+				assert(false, "Mismatched pattern on type")
+			}
+			if pattern_token.source != "" && pattern_token.source != source_token.source
+			{
+				assert(false, "Mismatched pattern on source")
+			}
+		}
+		
+		match_index := 0
+		id := root.children[match_index].source
+		check(id == "foo")
+		
+		// TODO check return type
+		
+		checker_value, f := Function()
+		{
+			args := root.children[match_index + 2]
+			check(len(args.children) == 0)
+			
+			// FIXME do recursive expression matching
+			body := root.children[match_index + 5]
+			
+			body_result: ^Value
+			
+			if len(body.children) == 1
+			{
+				expr := body.children[0]
+				if expr.type == .Integer
+				{
+					value, ok := strconv.parse_int(expr.source)
+					assert(ok, "Could not parse body as int")
+					assert(value == 42, "Value was not 42")
+					body_result = value_from_i64(i64(value))
+				}
+				else
+				{
+					assert(false, "Unexpected value")
+				}
+			}
+			
+			// Patterns in precedence order
+			// _*_
+			// _+_
+			// Integer | Paren
+			
+			//
+			// 42 + 3 * 2
+			//      _ * _
+			//
+			// 3
+			if body_result != nil
+			{
+				Return(body_result)
+			}
+		}
+		End_Function()
+		program_end(&test_program)
+		
+		checker := value_as_function(checker_value, fn_void_to_i64)
+		check(checker() == 42)
 	})
 }
 

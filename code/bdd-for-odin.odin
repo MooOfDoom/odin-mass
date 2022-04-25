@@ -55,6 +55,7 @@ it :: proc(requirement: string, test: proc())
 	fmt.printf("  %v ", requirement)
 	if GLOBAL_bdd_state.failed_check
 	{
+		context.allocator = runtime.default_allocator()
 		fmt.printf("(FAIL)\n")
 		src: []byte
 		ok: bool
