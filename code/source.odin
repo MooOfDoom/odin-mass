@@ -338,61 +338,85 @@ Token_Matcher_State :: struct
 	child_index: int,
 }
 
-token_peek :: proc(state: ^Token_Matcher_State, delta: int) -> ^Token
+token_peek :: proc(state: ^Token_Matcher_State, peek_index: int) -> ^Token
 {
-	index := state.child_index + delta
+	index := state.child_index + peek_index
 	if index >= len(state.root.children) do return nil
 	return state.root.children[index]
 }
 
-token_peek_match :: proc(state: ^Token_Matcher_State, delta: int, pattern_token: ^Token) -> ^Token
+token_peek_match :: proc(state: ^Token_Matcher_State, peek_index: int, pattern_token: ^Token) -> ^Token
 {
-	source_token := token_peek(state, delta)
+	source_token := token_peek(state, peek_index)
 	if source_token == nil                                                       do return nil
 	if pattern_token.type != nil && pattern_token.type != source_token.type      do return nil
 	if pattern_token.source != "" && pattern_token.source != source_token.source do return nil
 	return source_token
 }
 
+program_lookup_type :: proc(program: ^Program, type_name: string) -> ^Descriptor
+{
+	type_value := scope_lookup(program.global_scope, type_name)
+	assert(type_value != nil, "Type not found in global scope")
+	assert(type_value.descriptor.type == .Type, "Type was not actually a type")
+	descriptor := type_value.descriptor.type_descriptor
+	assert(descriptor != nil, "Type somehow did not have a type_descriptor!")
+	return descriptor
+}
+
+Token_Match_Arg :: struct
+{
+	arg_name:  string,
+	type_name: string,
+}
+
+@(private="file")
+Token_Match :: proc(state: ^Token_Matcher_State, peek_index: ^int, pattern_token: ^Token) -> ^Token
+{
+	result := token_peek_match(state, peek_index^, pattern_token)
+	peek_index^ += 1
+	return result
+}
+
+@(private="file")
+Token_Match_Operator :: proc(state: ^Token_Matcher_State, peek_index: ^int, op: string) -> ^Token
+{
+	return Token_Match(state, peek_index, &Token{type = .Operator, source = op})
+}
+
+token_match_argument :: proc(state: ^Token_Matcher_State, program: ^Program) -> ^Token_Match_Arg
+{
+	peek_index := 0
+	
+	arg_id   := Token_Match(state, &peek_index, &Token{type = .Id}); if arg_id   == nil do return nil
+	colon    := Token_Match_Operator(state, &peek_index, ":");       if colon    == nil do return nil
+	arg_type := Token_Match(state, &peek_index, &Token{type = .Id}); if arg_type == nil do return nil
+	
+	return new_clone(Token_Match_Arg \
+	{
+		arg_name  = arg_id.source,
+		type_name = arg_type.source,
+	})
+}
+
 Token_Match_Function :: struct
 {
-	match: bool,
 	name:  string,
 	value: ^Value,
 }
 
-token_match_function_definition :: proc(state: ^Token_Matcher_State, program: ^Program) -> Token_Match_Function
+token_match_function_definition :: proc(state: ^Token_Matcher_State, program: ^Program) -> ^Token_Match_Function
 {
-	result: Token_Match_Function
+	peek_index := 0
 	
-	delta := 0
+	id           := Token_Match(state, &peek_index, &Token{type = .Id});    if id           == nil do return nil
+	colon_colon  := Token_Match_Operator(state, &peek_index, "::");         if colon_colon  == nil do return nil
+	args         := Token_Match(state, &peek_index, &Token{type = .Paren}); if args         == nil do return nil
+	arrow        := Token_Match_Operator(state, &peek_index, "->");         if arrow        == nil do return nil
+	return_types := Token_Match(state, &peek_index, &Token{type = .Paren}); if return_types == nil do return nil
+	body         := Token_Match(state, &peek_index, &Token{type = .Curly}); if body         == nil do return nil
 	
-	id := token_peek_match(state, delta, &Token{type = .Id})
-	delta += 1
-	if id == nil do return result
-	
-	colon_colon := token_peek_match(state, delta, &Token{type = .Operator, source = "::"})
-	delta += 1
-	if colon_colon == nil do return result
-	
-	args := token_peek_match(state, delta, &Token{type = .Paren})
-	delta += 1
-	if args == nil do return result
-	
-	arrow := token_peek_match(state, delta, &Token{type = .Operator, source = "->"})
-	delta += 1
-	if arrow == nil do return result
-	
-	return_types := token_peek_match(state, delta, &Token{type = .Paren})
-	delta += 1
-	if return_types == nil do return result
-	
-	body := token_peek_match(state, delta, &Token{type = .Curly})
-	delta += 1
-	if body == nil do return result
-	
-	result.match = true
-	result.name = id.source
+	function_scope := scope_make(program.global_scope)
 	
 	value := Function(program)
 	{
@@ -400,7 +424,13 @@ token_match_function_definition :: proc(state: ^Token_Matcher_State, program: ^P
 		
 		if len(args.children) != 0
 		{
-			assert(false, "Not implemented")
+			args_state: Token_Matcher_State = {root = args}
+			arg := token_match_argument(&args_state, program)
+			if arg != nil
+			{
+				arg_value := Arg(program_lookup_type(program, arg.type_name))
+				scope_define(function_scope, arg.arg_name, arg_value)
+			}
 		}
 		switch len(return_types.children)
 		{
@@ -412,13 +442,8 @@ token_match_function_definition :: proc(state: ^Token_Matcher_State, program: ^P
 			{
 				return_type_token := return_types.children[0]
 				assert(return_type_token.type == .Id, "Return type was not identifier")
-				type_value := scope_lookup(program.global_scope, return_type_token.source)
-				assert(type_value != nil, "Return type not found in global scope")
-				assert(type_value.descriptor.type == .Type, "Return type was not a type")
 				
-				descriptor := type_value.descriptor.type_descriptor
-				assert(descriptor != nil, "Return type somehow did not have a type_descriptor!")
-				fn_return_descriptor(builder, descriptor)
+				fn_return_descriptor(builder, program_lookup_type(program, return_type_token.source))
 			}
 			case 2:
 			{
@@ -437,6 +462,12 @@ token_match_function_definition :: proc(state: ^Token_Matcher_State, program: ^P
 				assert(ok, "Could not parse body as int")
 				assert(value == 42, "Value was not 42")
 				body_result = value_from_i64(i64(value))
+			}
+			else if expr.type == .Id
+			{
+				var := scope_lookup(function_scope, expr.source)
+				assert(var != nil, "Variable not found in function scope")
+				body_result = var
 			}
 			else
 			{
@@ -461,7 +492,9 @@ token_match_function_definition :: proc(state: ^Token_Matcher_State, program: ^P
 	}
 	End_Function()
 	
-	result.value = value
-	
-	return result
+	return new_clone(Token_Match_Function \
+	{
+		name  = id.source,
+		value = value,
+	})
 }

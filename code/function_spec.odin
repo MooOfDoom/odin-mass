@@ -106,7 +106,7 @@ function_spec :: proc()
 			child_index = 0,
 		}
 		match_function := token_match_function_definition(&state, &test_program)
-		check(match_function.match)
+		check(match_function != nil)
 		
 		check(match_function.name == "foo")
 		
@@ -114,6 +114,30 @@ function_spec :: proc()
 		
 		checker := value_as_function(match_function.value, fn_void_to_i64)
 		check(checker() == 42)
+	})
+	
+	it("should be able to parse a s64 -> s64 function", proc()
+	{
+		source := `foo :: (x : s64) -> (s64) { x }`
+		result := tokenize("_test_.mass", source)
+		check(result.type == .Success)
+		root := result.root
+		check(root != nil)
+		check(root.type == .Module)
+		
+		// print_token_tree(root)
+		
+		state: Token_Matcher_State = {root = root}
+		match_function := token_match_function_definition(&state, &test_program)
+		check(match_function != nil)
+		
+		check(match_function.name == "foo")
+		
+		program_end(&test_program)
+		
+		checker := value_as_function(match_function.value, fn_i64_to_i64)
+		check(checker(42) == 42)
+		check(checker(21) == 21)
 	})
 	
 	it("should write out an executable that exits with status code 42", proc()
