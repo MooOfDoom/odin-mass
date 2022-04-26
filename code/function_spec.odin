@@ -92,6 +92,7 @@ function_spec :: proc()
 	it("should be able to parse a void -> s64 function", proc()
 	{
 		source := `foo :: () -> (s64) { 42 }`
+		
 		result := tokenize("_test_.mass", source)
 		check(result.type == .Success)
 		root := result.root
@@ -116,9 +117,10 @@ function_spec :: proc()
 		check(checker() == 42)
 	})
 	
-	it("should be able to parse a s64 -> s64 function", proc()
+	it("should be able to parse and run a s64 -> s64 function", proc()
 	{
 		source := `foo :: (x : s64) -> (s64) { x }`
+		
 		result := tokenize("_test_.mass", source)
 		check(result.type == .Success)
 		root := result.root
@@ -138,6 +140,27 @@ function_spec :: proc()
 		checker := value_as_function(match_function.value, fn_i64_to_i64)
 		check(checker(42) == 42)
 		check(checker(21) == 21)
+	})
+	
+	it("should be able to parse and run a plus function", proc()
+	{
+		source := `plus :: (x : s64, y: s64, z: s64) -> (s64) { x + y + z }`
+		
+		result := tokenize("_test_.mass", source)
+		check(result.type == .Success)
+		root := result.root
+		
+		// print_token_tree(root)
+		
+		state: Token_Matcher_State = {root = root}
+		match_function := token_match_function_definition(&state, &test_program)
+		check(match_function != nil)
+		
+		program_end(&test_program)
+		
+		checker := value_as_function(match_function.value, fn_i64_i64_i64_to_i64)
+		check(checker(30, 10, 2) == 42)
+		check(checker(20, 1, 21) == 42)
 	})
 	
 	it("should write out an executable that exits with status code 42", proc()

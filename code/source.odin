@@ -17,6 +17,7 @@ Token_Type :: enum
 	Square,
 	Curly,
 	Module,
+	Value,
 }
 
 Tokenizer_State :: enum
@@ -37,6 +38,7 @@ Token :: struct
 	using data: struct #raw_union
 	{
 		children: [dynamic]^Token,
+		value:    ^Value,
 	},
 }
 
@@ -371,6 +373,14 @@ Token_Match_Arg :: struct
 }
 
 @(private="file")
+Maybe_Token_Match :: proc(state: ^Token_Matcher_State, peek_index: ^int, pattern_token: ^Token) -> ^Token
+{
+	result := token_peek_match(state, peek_index^, pattern_token)
+	if result != nil do peek_index^ += 1
+	return result
+}
+
+@(private="file")
 Token_Match :: proc(state: ^Token_Matcher_State, peek_index: ^int, pattern_token: ^Token) -> ^Token
 {
 	result := token_peek_match(state, peek_index^, pattern_token)
@@ -391,12 +401,95 @@ token_match_argument :: proc(state: ^Token_Matcher_State, program: ^Program) -> 
 	arg_id   := Token_Match(state, &peek_index, &Token{type = .Id}); if arg_id   == nil do return nil
 	colon    := Token_Match_Operator(state, &peek_index, ":");       if colon    == nil do return nil
 	arg_type := Token_Match(state, &peek_index, &Token{type = .Id}); if arg_type == nil do return nil
+	comma    := Maybe_Token_Match(state, &peek_index, &Token{type = .Operator, source = ","})
+	state.child_index += peek_index
 	
 	return new_clone(Token_Match_Arg \
 	{
 		arg_name  = arg_id.source,
 		type_name = arg_type.source,
 	})
+}
+
+token_match_expression :: proc(state: ^Token_Matcher_State, program: ^Program,
+                               function_scope: ^Scope) -> ^Value
+{
+	// plus := token_peek_match(state, 1, &Token{type = .Operator, source = "+"})
+	
+	if len(state.root.children) == 0 do return nil
+	
+	// [Int_Token{42}] -> [Value_Token{Value{42}}]
+	retry: for
+	{
+		for expr, i in &state.root.children
+		{
+			if expr.type == .Integer
+			{
+				value, ok := strconv.parse_int(expr.source)
+				assert(ok, "Could not parse expression as int")
+				expr = new_clone(Token \
+				{
+					type   = .Value,
+					parent = expr.parent,
+					source = expr.source,
+					data   = {value = value_from_i64(i64(value))},
+				})
+				continue retry
+			}
+			else if expr.type == .Id
+			{
+				var := scope_lookup(function_scope, expr.source)
+				assert(var != nil, "Variable not found in function scope")
+				expr = new_clone(Token \
+				{
+					type   = .Value,
+					parent = expr.parent,
+					source = expr.source,
+					data   = {value = var},
+				})
+				continue retry
+			}
+		}
+		break
+	}
+	
+	retry2: for
+	{
+		for expr, i in &state.root.children
+		{
+			if i > 0 && i + 1 < len(state.root.children) && expr.type == .Operator && expr.source == "+"
+			{
+				lhs := state.root.children[i - 1]
+				assert(lhs.type == .Value)
+				rhs := state.root.children[i + 1]
+				assert(rhs.type == .Value)
+				
+				result := Plus(lhs.value, rhs.value)
+				result_token := new_clone(Token \
+				{
+					type   = .Value,
+					parent = expr.parent,
+					source = expr.source,
+					data   = {value = result},
+				})
+				state.root.children[i - 1] = result_token
+				remove_range(&state.root.children, i, i + 2)
+				continue retry2
+			}
+		}
+		break
+	}
+	
+	// Patterns in precedence order
+	// _+_
+	// Integer | Id
+	
+	// x + y
+	
+	assert(len(state.root.children) == 1, "Expression could not be reduced to one value")
+	result := state.root.children[0]
+	assert(result.type == .Value, "Expression result was not a value")
+	return result.value
 }
 
 Token_Match_Function :: struct
@@ -425,12 +518,18 @@ token_match_function_definition :: proc(state: ^Token_Matcher_State, program: ^P
 		if len(args.children) != 0
 		{
 			args_state: Token_Matcher_State = {root = args}
-			arg := token_match_argument(&args_state, program)
-			if arg != nil
+			for
 			{
-				arg_value := Arg(program_lookup_type(program, arg.type_name))
-				scope_define(function_scope, arg.arg_name, arg_value)
+				prev_child_index := args_state.child_index
+				arg := token_match_argument(&args_state, program)
+				if arg != nil
+				{
+					arg_value := Arg(program_lookup_type(program, arg.type_name))
+					scope_define(function_scope, arg.arg_name, arg_value)
+				}
+				if prev_child_index == args_state.child_index do break
 			}
+			assert(args_state.child_index == len(args.children), "Error while parsing args")
 		}
 		switch len(return_types.children)
 		{
@@ -452,39 +551,9 @@ token_match_function_definition :: proc(state: ^Token_Matcher_State, program: ^P
 		}
 		fn_freeze(builder)
 		
-		body_result: ^Value
-		if len(body.children) == 1
-		{
-			expr := body.children[0]
-			if expr.type == .Integer
-			{
-				value, ok := strconv.parse_int(expr.source)
-				assert(ok, "Could not parse body as int")
-				assert(value == 42, "Value was not 42")
-				body_result = value_from_i64(i64(value))
-			}
-			else if expr.type == .Id
-			{
-				var := scope_lookup(function_scope, expr.source)
-				assert(var != nil, "Variable not found in function scope")
-				body_result = var
-			}
-			else
-			{
-				assert(false, "Unexpected value")
-			}
-		}
+		body_state: Token_Matcher_State = {root = body}
+		body_result := token_match_expression(&body_state, program, function_scope)
 		
-		// Patterns in precedence order
-		// _*_
-		// _+_
-		// Integer | Paren
-		
-		//
-		// 42 + 3 * 2
-		//      _ * _
-		//
-		// 3
 		if body_result != nil
 		{
 			Return(body_result)
