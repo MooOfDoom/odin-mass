@@ -411,60 +411,47 @@ token_match_argument :: proc(state: ^Token_Matcher_State, program: ^Program) -> 
 	})
 }
 
-token_match_expression :: proc(state: ^Token_Matcher_State, program: ^Program,
-                               function_scope: ^Scope) -> ^Value
+token_force_value :: proc(token: ^Token, scope: ^Scope) -> ^Value
 {
-	// plus := token_peek_match(state, 1, &Token{type = .Operator, source = "+"})
+	result_value: ^Value
+	if token.type == .Integer
+	{
+		value, ok := strconv.parse_int(token.source)
+		assert(ok, "Could not parse expression as int")
+		result_value = value_from_i64(i64(value))
+	}
+	else if token.type == .Id
+	{
+		result_value = scope_lookup(scope, token.source)
+	}
+	else if token.type == .Value
+	{
+		return token.value
+	}
+	else
+	{
+		assert(false, "Not implemented")
+	}
+	assert(result_value != nil, "Token could not be forced into value")
+	return result_value
+}
+
+token_match_expression :: proc(root: ^Token, scope: ^Scope) -> ^Value
+{
+	assert(root.type == .Paren || root.type == .Curly, "Root token was not the right type to match expressions")
 	
-	if len(state.root.children) == 0 do return nil
+	if len(root.children) == 0 do return nil
 	
-	// [Int_Token{42}] -> [Value_Token{Value{42}}]
 	retry: for
 	{
-		for expr, i in &state.root.children
+		for expr, i in &root.children
 		{
-			if expr.type == .Integer
+			if i > 0 && i + 1 < len(root.children) && expr.type == .Operator && expr.source == "+"
 			{
-				value, ok := strconv.parse_int(expr.source)
-				assert(ok, "Could not parse expression as int")
-				expr = new_clone(Token \
-				{
-					type   = .Value,
-					parent = expr.parent,
-					source = expr.source,
-					data   = {value = value_from_i64(i64(value))},
-				})
-				continue retry
-			}
-			else if expr.type == .Id
-			{
-				var := scope_lookup(function_scope, expr.source)
-				assert(var != nil, "Variable not found in function scope")
-				expr = new_clone(Token \
-				{
-					type   = .Value,
-					parent = expr.parent,
-					source = expr.source,
-					data   = {value = var},
-				})
-				continue retry
-			}
-		}
-		break
-	}
-	
-	retry2: for
-	{
-		for expr, i in &state.root.children
-		{
-			if i > 0 && i + 1 < len(state.root.children) && expr.type == .Operator && expr.source == "+"
-			{
-				lhs := state.root.children[i - 1]
-				assert(lhs.type == .Value)
-				rhs := state.root.children[i + 1]
-				assert(rhs.type == .Value)
+				lhs := token_force_value(root.children[i - 1], scope)
+				rhs := token_force_value(root.children[i + 1], scope)
 				
-				result := Plus(lhs.value, rhs.value)
+				result := Plus(lhs, rhs)
 				result_token := new_clone(Token \
 				{
 					type   = .Value,
@@ -472,24 +459,16 @@ token_match_expression :: proc(state: ^Token_Matcher_State, program: ^Program,
 					source = expr.source,
 					data   = {value = result},
 				})
-				state.root.children[i - 1] = result_token
-				remove_range(&state.root.children, i, i + 2)
-				continue retry2
+				root.children[i - 1] = result_token
+				remove_range(&root.children, i, i + 2)
+				continue retry
 			}
 		}
 		break
 	}
 	
-	// Patterns in precedence order
-	// _+_
-	// Integer | Id
-	
-	// x + y
-	
-	assert(len(state.root.children) == 1, "Expression could not be reduced to one value")
-	result := state.root.children[0]
-	assert(result.type == .Value, "Expression result was not a value")
-	return result.value
+	assert(len(root.children) == 1, "Expression could not be reduced to one value")
+	return token_force_value(root.children[0], scope)
 }
 
 Token_Match_Function :: struct
@@ -498,72 +477,115 @@ Token_Match_Function :: struct
 	value: ^Value,
 }
 
-token_match_function_definition :: proc(state: ^Token_Matcher_State, program: ^Program) -> ^Token_Match_Function
+token_match_module :: proc(token: ^Token, program: ^Program)
 {
-	peek_index := 0
+	assert(token.type == .Module, "Token was not a module")
+	if len(token.children) == 0 do return
 	
-	id           := Token_Match(state, &peek_index, &Token{type = .Id});    if id           == nil do return nil
-	colon_colon  := Token_Match_Operator(state, &peek_index, "::");         if colon_colon  == nil do return nil
-	args         := Token_Match(state, &peek_index, &Token{type = .Paren}); if args         == nil do return nil
-	arrow        := Token_Match_Operator(state, &peek_index, "->");         if arrow        == nil do return nil
-	return_types := Token_Match(state, &peek_index, &Token{type = .Paren}); if return_types == nil do return nil
-	body         := Token_Match(state, &peek_index, &Token{type = .Curly}); if body         == nil do return nil
-	
-	function_scope := scope_make(program.global_scope)
-	
-	value := Function(program)
+	state := &Token_Matcher_State{root = token}
+	for did_replace := true; did_replace;
 	{
-		builder := get_builder_from_context()
-		
-		if len(args.children) != 0
+		did_replace = false
+		for i in 0 ..< len(token.children)
 		{
-			args_state: Token_Matcher_State = {root = args}
-			for
+			state.child_index = i
+			
+			arrow := token_peek_match(state, 1, &Token{type = .Operator, source = "->"})
+			if arrow == nil do continue
+			
+			args         := token_peek_match(state, 0, &Token{type = .Paren})
+			return_types := token_peek_match(state, 2, &Token{type = .Paren})
+			body         := token_peek_match(state, 3, &Token{type = .Curly})
+			
+			// TODO show proper error to the user
+			assert(args != nil, "Function definition is missing args")
+			assert(return_types != nil, "Function definition is missing return type")
+			assert(body != nil, "Function definition is missing body")
+			
+			function_scope := scope_make(program.global_scope)
+			
+			value := Function(program)
 			{
-				prev_child_index := args_state.child_index
-				arg := token_match_argument(&args_state, program)
-				if arg != nil
-				{
-					arg_value := Arg(program_lookup_type(program, arg.type_name))
-					scope_define(function_scope, arg.arg_name, arg_value)
-				}
-				if prev_child_index == args_state.child_index do break
-			}
-			assert(args_state.child_index == len(args.children), "Error while parsing args")
-		}
-		switch len(return_types.children)
-		{
-			case 0:
-			{
-				value.descriptor.function.returns = &void_value
-			}
-			case 1:
-			{
-				return_type_token := return_types.children[0]
-				assert(return_type_token.type == .Id, "Return type was not identifier")
+				builder := get_builder_from_context()
 				
-				fn_return_descriptor(builder, program_lookup_type(program, return_type_token.source))
+				if len(args.children) != 0
+				{
+					args_state: Token_Matcher_State = {root = args}
+					for
+					{
+						prev_child_index := args_state.child_index
+						arg := token_match_argument(&args_state, program)
+						if arg != nil
+						{
+							arg_value := Arg(program_lookup_type(program, arg.type_name))
+							scope_define(function_scope, arg.arg_name, arg_value)
+						}
+						if prev_child_index == args_state.child_index do break
+					}
+					assert(args_state.child_index == len(args.children), "Error while parsing args")
+				}
+				switch len(return_types.children)
+				{
+					case 0:
+					{
+						value.descriptor.function.returns = &void_value
+					}
+					case 1:
+					{
+						return_type_token := return_types.children[0]
+						assert(return_type_token.type == .Id, "Return type was not identifier")
+						
+						fn_return_descriptor(builder, program_lookup_type(program, return_type_token.source))
+					}
+					case 2:
+					{
+						assert(false, "Multiple return types are not supported at the moment")
+					}
+				}
+				fn_freeze(builder)
+				
+				body_result := token_match_expression(body, function_scope)
+				
+				if body_result != nil
+				{
+					Return(body_result)
+				}
 			}
-			case 2:
+			End_Function()
+			
+			result_token := new_clone(Token \
 			{
-				assert(false, "Multiple return types are not supported at the moment")
-			}
-		}
-		fn_freeze(builder)
-		
-		body_state: Token_Matcher_State = {root = body}
-		body_result := token_match_expression(&body_state, program, function_scope)
-		
-		if body_result != nil
-		{
-			Return(body_result)
+				type   = .Value,
+				parent = token,
+				source = token.source, // FIXME
+				data   = {value = value},
+			})
+			
+			token.children[i] = result_token
+			remove_range(&token.children, i + 1, i + 4)
+			did_replace = true
 		}
 	}
-	End_Function()
 	
-	return new_clone(Token_Match_Function \
+	for did_replace := true; did_replace;
 	{
-		name  = id.source,
-		value = value,
-	})
+		did_replace = false
+		for i := 0; i < len(token.children); i += 1
+		{
+			state.child_index = i
+			
+			define := token_peek_match(state, 1, &Token{type = .Operator, source = "::"})
+			if define == nil do continue
+			
+			name := token_peek_match(state, 0, &Token{type = .Id})
+			value := token_force_value(token_peek_match(state, 2, &Token{}), program.global_scope)
+			scope_define(program.global_scope, name.source, value)
+			
+			remove_range(&token.children, i, i + 3)
+			did_replace = true
+			i -= 1 // Don't advance
+		}
+	}
+	
+	assert(len(token.children) == 0, "Unable to parse entire module")
 }

@@ -95,25 +95,14 @@ function_spec :: proc()
 		
 		result := tokenize("_test_.mass", source)
 		check(result.type == .Success)
-		root := result.root
-		check(root != nil)
-		check(root.type == .Module)
 		
-		// print_token_tree(root)
-		
-		state: Token_Matcher_State =
-		{
-			root        = root,
-			child_index = 0,
-		}
-		match_function := token_match_function_definition(&state, &test_program)
-		check(match_function != nil)
-		
-		check(match_function.name == "foo")
-		
+		token_match_module(result.root, &test_program)
 		program_end(&test_program)
 		
-		checker := value_as_function(match_function.value, fn_void_to_i64)
+		foo := scope_lookup(test_program.global_scope, "foo")
+		assert(foo != nil, "foo not found in global scope")
+		
+		checker := value_as_function(foo, fn_void_to_i64)
 		check(checker() == 42)
 	})
 	
@@ -123,21 +112,14 @@ function_spec :: proc()
 		
 		result := tokenize("_test_.mass", source)
 		check(result.type == .Success)
-		root := result.root
-		check(root != nil)
-		check(root.type == .Module)
 		
-		// print_token_tree(root)
-		
-		state: Token_Matcher_State = {root = root}
-		match_function := token_match_function_definition(&state, &test_program)
-		check(match_function != nil)
-		
-		check(match_function.name == "foo")
-		
+		token_match_module(result.root, &test_program)
 		program_end(&test_program)
 		
-		checker := value_as_function(match_function.value, fn_i64_to_i64)
+		foo := scope_lookup(test_program.global_scope, "foo")
+		assert(foo != nil, "foo not found in global scope")
+		
+		checker := value_as_function(foo, fn_i64_to_i64)
 		check(checker(42) == 42)
 		check(checker(21) == 21)
 	})
@@ -148,19 +130,39 @@ function_spec :: proc()
 		
 		result := tokenize("_test_.mass", source)
 		check(result.type == .Success)
-		root := result.root
 		
-		// print_token_tree(root)
-		
-		state: Token_Matcher_State = {root = root}
-		match_function := token_match_function_definition(&state, &test_program)
-		check(match_function != nil)
-		
+		token_match_module(result.root, &test_program)
 		program_end(&test_program)
 		
-		checker := value_as_function(match_function.value, fn_i64_i64_i64_to_i64)
+		plus := scope_lookup(test_program.global_scope, "plus")
+		assert(plus != nil, "plus not found in global scope")
+		
+		checker := value_as_function(plus, fn_i64_i64_i64_to_i64)
 		check(checker(30, 10, 2) == 42)
 		check(checker(20, 1, 21) == 42)
+	})
+	
+	it("should be able to parse and run multiple function definitions", proc()
+	{
+		source :=
+`one :: () -> (s64) { 1 }
+two :: () -> (s64) { 2 }`
+		
+		result := tokenize("_test_.mass", source)
+		check(result.type == .Success)
+		
+		token_match_module(result.root, &test_program)
+		program_end(&test_program)
+		
+		one := scope_lookup(test_program.global_scope, "one")
+		assert(one != nil, "one not found in global scope")
+		
+		check(value_as_function(one, fn_void_to_i64)() == 1)
+		
+		two := scope_lookup(test_program.global_scope, "two")
+		assert(two != nil, "two not found in global scope")
+		
+		check(value_as_function(two, fn_void_to_i64)() == 2)
 	})
 	
 	it("should write out an executable that exits with status code 42", proc()
