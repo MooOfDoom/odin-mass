@@ -9,6 +9,7 @@ import "core:sys/win32"
 
 PAGE_READWRITE         :: win32.PAGE_READWRITE
 PAGE_EXECUTE_READWRITE :: win32.PAGE_EXECUTE_READWRITE
+PAGE_EXECUTE_READ      :: win32.PAGE_EXECUTE_READ
 
 fn_opaque                         :: distinct rawptr
 fn_void_to_void                   :: #type proc "c" ()

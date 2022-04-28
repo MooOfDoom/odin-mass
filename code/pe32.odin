@@ -193,7 +193,7 @@ encode_text_section :: proc(program: ^Program, header: ^IMAGE_SECTION_HEADER) ->
 	
 	for function in &program.functions
 	{
-		if &function == program.entry_point
+		if function.result == program.entry_point
 		{
 			result.entry_point_rva = get_rva(buffer, header)
 		}
@@ -215,6 +215,8 @@ write_executable :: proc(file_path: cstring, program: ^Program)
 		copy(result[:], name)
 		return result
 	}
+	
+	assert(program.entry_point != nil, "Program does not have an entry point")
 	
 	// Sections
 	sections := [?]IMAGE_SECTION_HEADER \

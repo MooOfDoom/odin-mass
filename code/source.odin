@@ -526,7 +526,8 @@ token_force_value :: proc(token: ^Token, scope: ^Scope, loc := #caller_location)
 	{
 		value, ok := strconv.parse_int(token.source)
 		assert(ok, "Could not parse expression as int", loc)
-		result_value = value_from_i64(i64(value))
+		// FIXME We should be able to size immediates automatically
+		result_value = value_from_i32(i32(value))
 	}
 	else if token.type == .Id
 	{
@@ -550,9 +551,22 @@ token_force_value :: proc(token: ^Token, scope: ^Scope, loc := #caller_location)
 
 token_match_call_arguments :: proc(token: ^Token, scope: ^Scope, builder: ^Function_Builder) -> [dynamic]^Value
 {
-	// FIXME implement this
-	assert(len(token.children) == 0, "TODO Implement arguments to called functions!")
-	return make([dynamic]^Value, 0, 16)
+	result := make([dynamic]^Value, 0, 16)
+	if len(token.children) == 0
+	{
+		// Nothing to do
+	}
+	else if len(token.children) == 1
+	{
+		value := token_force_value(token.children[0], scope)
+		append(&result, value)
+	}
+	else
+	{
+		// FIXME implement this
+		assert(false, "Not implemented")
+	}
+	return result
 }
 
 token_value_make :: proc(parent: ^Token, result: ^Value, source_tokens: ..^Token) -> ^Token
@@ -670,16 +684,55 @@ token_force_lazy_function_definition :: proc(lazy_function_definition: ^Lazy_Fun
 		}
 		fn_freeze(builder)
 		
-		body_result := token_match_expression(body, function_scope, builder)
-		
-		if body_result != nil
+		// FIXME figure out a better way to distinguish imports
+		if body.type == .Value && body.value.descriptor == nil
 		{
-			Return(body_result)
+			body.value.descriptor = builder.result.descriptor
+			End_Function()
+			return body.value
+		}
+		else
+		{
+			body_result := token_match_expression(body, function_scope, builder)
+			if body_result != nil
+			{
+				Return(body_result)
+			}
 		}
 	}
 	End_Function()
 	
 	return value
+}
+
+token_string_to_string :: proc(token: ^Token) -> string
+{
+	assert(len(token.source) >= 2, "String does not have quotation marks")
+	return token.source[1:len(token.source) - 1]
+}
+
+token_import_match_arguments :: proc(paren: ^Token, program: ^Program) -> ^Token
+{
+	assert(paren.type == .Paren, "Import arguments were not in parentheses")
+	state := &Token_Matcher_State{root = paren}
+	
+	library_name_string := token_peek_match(state, 0, &Token{type = .String})
+	assert(library_name_string != nil, "Import arguments missing the library name")
+	comma := token_peek_match(state, 1, &Token{type = .Operator, source = ","})
+	assert(comma != nil, "Import arguments missing comma")
+	symbol_name_string := token_peek_match(state, 2, &Token{type = .String})
+	assert(symbol_name_string != nil, "Import arguments missing symbol name")
+	
+	library_name := token_string_to_string(library_name_string)
+	symbol_name  := token_string_to_string(symbol_name_string)
+	
+	result := new_clone(Value \
+	{
+		descriptor = nil,
+		operand = import_symbol(program, library_name, symbol_name),
+	})
+	
+	return token_value_make(paren, result, library_name_string, comma, symbol_name_string)
 }
 
 token_match_module :: proc(token: ^Token, program: ^Program)
@@ -688,6 +741,28 @@ token_match_module :: proc(token: ^Token, program: ^Program)
 	if len(token.children) == 0 do return
 	
 	state := &Token_Matcher_State{root = token}
+	
+	// Matching symbol imports
+	for did_replace := true; did_replace;
+	{
+		did_replace = false
+		for i := 0; i < len(token.children); i += 1
+		{
+			state.child_index = i
+			
+			import_ := token_peek_match(state, 0, &Token{type = .Id, source = "import"})
+			if import_ == nil do continue
+			args := token_peek_match(state, 1, &Token{type = .Paren})
+			if args == nil do continue
+			
+			result_token := token_import_match_arguments(args, program)
+			
+			token.children[i] = result_token
+			ordered_remove(&token.children, i + 1)
+			did_replace = true
+		}
+	}
+	
 	for did_replace := true; did_replace;
 	{
 		did_replace = false
@@ -700,7 +775,7 @@ token_match_module :: proc(token: ^Token, program: ^Program)
 			
 			args         := token_peek_match(state, 0, &Token{type = .Paren})
 			return_types := token_peek_match(state, 2, &Token{type = .Paren})
-			body         := token_peek_match(state, 3, &Token{type = .Curly})
+			body         := token_peek(state, 3)
 			// TODO show proper error to the user
 			assert(args != nil, "Function definition is missing args")
 			assert(return_types != nil, "Function definition is missing return type")

@@ -264,7 +264,7 @@ Program :: struct
 {
 	data_buffer:      Buffer,
 	import_libraries: [dynamic]Import_Library,
-	entry_point:      ^Function_Builder,
+	entry_point:      ^Value,
 	functions:        [dynamic]Function_Builder,
 	code_base_rva:    i64,
 	data_base_rva:    i64,

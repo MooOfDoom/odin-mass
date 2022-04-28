@@ -115,6 +115,7 @@ fn_begin :: proc(program: ^Program) -> (result: ^Value, builder: ^Function_Build
 			}),
 		}),
 	})
+	// NOTE(Lothar): DANGER: Pointing into dynamic array!
 	builder = &program.functions[len(program.functions) - 1]
 	result = builder.result
 	result.operand = label32(builder.prolog_label)
@@ -180,7 +181,7 @@ program_end :: proc(program: ^Program, loc := #caller_location) -> Jit_Program
 	code_buffer_size := estimate_max_code_size_in_bytes(program)
 	result: Jit_Program =
 	{
-		code_buffer = make_buffer(code_buffer_size, PAGE_EXECUTE_READWRITE),
+		code_buffer = make_buffer(code_buffer_size, PAGE_READWRITE),
 		data_buffer = program.data_buffer,
 	}
 	program.code_base_rva = i64(uintptr(&result.code_buffer.memory[0]))
@@ -205,6 +206,10 @@ program_end :: proc(program: ^Program, loc := #caller_location) -> Jit_Program
 	{
 		fn_encode(&result.code_buffer, &builder, loc)
 	}
+	
+	// Making code executable
+	dummy: u32
+	win32.virtual_protect(&result.code_buffer.memory[0], uint(code_buffer_size), PAGE_EXECUTE_READ, &dummy)
 	
 	return result
 }
@@ -650,27 +655,32 @@ Function_Context :: struct
 
 get_builder_from_context :: proc() -> ^Function_Builder
 {
-	return (cast(^Function_Context)context.user_ptr).builder
+	context_stack := cast(^[dynamic]Function_Context)context.user_ptr
+	return context_stack[len(context_stack) - 1].builder
 }
 
 get_if_stack_from_context :: proc() -> ^[dynamic]^Label
 {
-	return &(cast(^Function_Context)context.user_ptr).if_stack
+	context_stack := cast(^[dynamic]Function_Context)context.user_ptr
+	return &context_stack[len(context_stack) - 1].if_stack
 }
 
 get_match_stack_from_context :: proc() -> ^[dynamic]^Label
 {
-	return &(cast(^Function_Context)context.user_ptr).match_stack
+	context_stack := cast(^[dynamic]Function_Context)context.user_ptr
+	return &context_stack[len(context_stack) - 1].match_stack
 }
 
 get_case_stack_from_context :: proc() -> ^[dynamic]^Label
 {
-	return &(cast(^Function_Context)context.user_ptr).case_stack
+	context_stack := cast(^[dynamic]Function_Context)context.user_ptr
+	return &context_stack[len(context_stack) - 1].case_stack
 }
 
 get_loop_stack_from_context :: proc() -> ^[dynamic]Loop_Builder
 {
-	return &(cast(^Function_Context)context.user_ptr).loop_stack
+	context_stack := cast(^[dynamic]Function_Context)context.user_ptr
+	return &context_stack[len(context_stack) - 1].loop_stack
 }
 
 //
@@ -682,7 +692,9 @@ Function :: proc(program: ^Program = nil) -> ^Value
 	program := program == nil ? &test_program : program
 	
 	result, builder := fn_begin(program)
-	(cast(^Function_Context)context.user_ptr).builder = builder
+	
+	context_stack := cast(^[dynamic]Function_Context)context.user_ptr
+	append(context_stack, Function_Context{builder = builder})
 	
 	return result
 }
@@ -701,6 +713,9 @@ End_Function :: proc(loc := #caller_location)
 	assert(len(loop_stack)  == 0, "Unmatched Loop in function",  loc)
 	
 	fn_end(builder)
+	
+	context_stack := cast(^[dynamic]Function_Context)context.user_ptr
+	pop(context_stack, loc)
 }
 
 Return :: proc(to_return: ^Value, loc := #caller_location)

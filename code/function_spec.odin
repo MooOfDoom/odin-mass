@@ -91,7 +91,7 @@ function_spec :: proc()
 	
 	it("should be able to parse a void -> s64 function", proc()
 	{
-		source := `foo :: () -> (s64) { 42 }`
+		source := `foo :: () -> (s32) { 42 }`
 		
 		result := tokenize("_test_.mass", source)
 		check(result.type == .Success)
@@ -103,7 +103,7 @@ function_spec :: proc()
 		
 		program_end(&test_program)
 		
-		checker := value_as_function(foo, fn_void_to_i64)
+		checker := value_as_function(foo, fn_void_to_i32)
 		check(checker() == 42)
 	})
 	
@@ -148,8 +148,8 @@ function_spec :: proc()
 	it("should be able to parse and run multiple function definitions", proc()
 	{
 		source :=
-`proxy :: () -> (s64) { one() }
-one :: () -> (s64) { 1 }`
+`proxy :: () -> (s32) { one() }
+one :: () -> (s32) { 1 }`
 		
 		result := tokenize("_test_.mass", source)
 		check(result.type == .Success)
@@ -162,6 +162,29 @@ one :: () -> (s64) { 1 }`
 		program_end(&test_program)
 		
 		check(value_as_function(proxy, fn_void_to_i64)() == 1)
+	})
+	
+	it("should write out an executable that exits with status code 0", proc()
+	{
+		program := &test_program
+		
+		// TODO Allow implicit conversion of last statement in a function body to void
+		source :=
+`main :: () -> () { ExitProcess(42) }
+ExitProcess :: (status: s32) -> () import("kernel32.dll", "ExitProcess")`
+		
+		result := tokenize("_test_.mass", source)
+		check(result.type == .Success)
+		
+		token_match_module(result.root, &test_program)
+		
+		// FIXME set as entry point
+		entry := scope_lookup_force(test_program.global_scope, "main")
+		assert(entry != nil, "main not found in global scope")
+		
+		program.entry_point = entry
+		
+		write_executable("build\\test_parsed.exe", program)
 	})
 	
 	it("should write out an executable that exits with status code 42", proc()
@@ -178,10 +201,11 @@ one :: () -> (s64) { 1 }`
 		
 		main := Function()
 		{
-			program.entry_point = get_builder_from_context()
 			Call(my_exit)
 		}
 		End_Function()
+		
+		program.entry_point = main
 		
 		write_executable("build\\test.exe", program)
 	})
@@ -198,7 +222,6 @@ one :: () -> (s64) { 1 }`
 		
 		main := Function()
 		{
-			program.entry_point = get_builder_from_context()
 			handle            := Call(GetStdHandle_value, STD_OUTPUT_HANDLE_value)
 			bytes_written     := Stack_i32(value_from_i32(0))
 			bytes_written_ptr := PointerTo(bytes_written)
@@ -213,6 +236,8 @@ one :: () -> (s64) { 1 }`
 			Call(ExitProcess_value, value_from_i32(0))
 		}
 		End_Function()
+		
+		program.entry_point = main
 		
 		write_executable("build\\hello_world.exe", program)
 	})
