@@ -18,6 +18,28 @@ Token_Type :: enum
 	Curly,
 	Module,
 	Value,
+	Lazy_Function_Definition,
+}
+
+Lazy_Function_Definition :: struct
+{
+	args:         ^Token,
+	return_types: ^Token,
+	body:         ^Token,
+	program:      ^Program,
+}
+
+Token :: struct
+{
+	parent: ^Token,
+	type:   Token_Type,
+	source: string,
+	using data: struct #raw_union
+	{
+		children:                  [dynamic]^Token,
+		value:                     ^Value,
+		lazy_function_definition : Lazy_Function_Definition,
+	},
 }
 
 Tokenizer_State :: enum
@@ -30,16 +52,87 @@ Tokenizer_State :: enum
 	Single_Line_Comment,
 }
 
-Token :: struct
+Scope_Entry_Type :: enum
 {
-	parent: ^Token,
-	type:   Token_Type,
-	source: string,
+	Value = 1,
+	Lazy,
+}
+
+Scope_Entry :: struct
+{
+	type: Scope_Entry_Type,
 	using data: struct #raw_union
 	{
-		children: [dynamic]^Token,
-		value:    ^Value,
+		value: ^Value,
+		token: ^Token,
 	},
+}
+
+Scope :: struct
+{
+	parent: ^Scope,
+	items:  map[string]Scope_Entry,
+}
+
+scope_make :: proc(parent: ^Scope = nil) -> ^Scope
+{
+	return new_clone(Scope \
+	{
+		parent = parent,
+		items  = make(map[string]Scope_Entry),
+	})
+}
+
+scope_lookup :: proc(scope: ^Scope, name: string) -> Scope_Entry
+{
+	scope := scope
+	
+	for scope != nil
+	{
+		result := scope.items[name]
+		if result.type != nil do return result
+		scope = scope.parent
+	}
+	return Scope_Entry{}
+}
+
+scope_lookup_force :: proc(scope: ^Scope, name: string, loc := #caller_location) -> ^Value
+{
+	entry := scope_lookup(scope, name)
+	assert(entry.type != nil, "Name not found in scope", loc)
+	
+	switch entry.type
+	{
+		case .Value:
+		{
+			return entry.value
+		}
+		case .Lazy:
+		{
+			return token_force_value(entry.token, scope, loc)
+		}
+	}
+	return nil
+}
+
+scope_define_value :: proc(scope: ^Scope, name: string, value: ^Value)
+{
+	// TODO think about what should happen when trying to redefine existing thing
+	scope.items[name] = Scope_Entry \
+	{
+		type = .Value,
+		data = {value = value},
+	}
+}
+
+scope_define_lazy :: proc(scope: ^Scope, name: string, token: ^Token)
+{
+	// TODO think about what should happen when trying to redefine existing thing
+	scope.items[name] = Scope_Entry \
+	{
+		type = .Lazy,
+		data = {token = token},
+	}
 }
 
 code_point_is_operator :: proc(code_point: rune) -> bool
@@ -104,6 +197,22 @@ print_token_tree :: proc(token: ^Token, indent: int = 0)
 	{
 		print_token_tree(child, indent + 1)
 	}
+}
+
+combine_token_sources :: proc(tokens: ..^Token) -> string
+{
+	if len(tokens) == 0 do return ""
+	
+	start := max(uintptr)
+	end := min(uintptr)
+	
+	for token in tokens
+	{
+		start = min(start, uintptr(raw_data(token.source)))
+		end = max(start, uintptr(raw_data(token.source)) + uintptr(len(token.source)))
+	}
+	
+	return transmute(string)mem.Raw_String{data = cast(^byte)start, len = int(end - start)}
 }
 
 tokenize :: proc(filename: string, source: string) -> Tokenizer_Result
@@ -358,10 +467,9 @@ token_peek_match :: proc(state: ^Token_Matcher_State, peek_index: int, pattern_t
 
 program_lookup_type :: proc(program: ^Program, type_name: string) -> ^Descriptor
 {
-	type_value := scope_lookup(program.global_scope, type_name)
-	assert(type_value != nil, "Type not found in global scope")
-	assert(type_value.descriptor.type == .Type, "Type was not actually a type")
-	descriptor := type_value.descriptor.type_descriptor
+	value := scope_lookup_force(program.global_scope, type_name)
+	assert(value.descriptor.type == .Type, "Type was not actually a type")
+	descriptor := value.descriptor.type_descriptor
 	assert(descriptor != nil, "Type somehow did not have a type_descriptor!")
 	return descriptor
 }
@@ -411,70 +519,167 @@ token_match_argument :: proc(state: ^Token_Matcher_State, program: ^Program) -> 
 	})
 }
 
-token_force_value :: proc(token: ^Token, scope: ^Scope) -> ^Value
+token_force_value :: proc(token: ^Token, scope: ^Scope, loc := #caller_location) -> ^Value
 {
 	result_value: ^Value
 	if token.type == .Integer
 	{
 		value, ok := strconv.parse_int(token.source)
-		assert(ok, "Could not parse expression as int")
+		assert(ok, "Could not parse expression as int", loc)
 		result_value = value_from_i64(i64(value))
 	}
 	else if token.type == .Id
 	{
-		result_value = scope_lookup(scope, token.source)
+		result_value = scope_lookup_force(scope, token.source, loc)
 	}
 	else if token.type == .Value
 	{
 		return token.value
 	}
+	else if token.type == .Lazy_Function_Definition
+	{
+		return token_force_lazy_function_definition(&token.lazy_function_definition)
+	}
 	else
 	{
-		assert(false, "Not implemented")
+		assert(false, "Not implemented", loc)
 	}
-	assert(result_value != nil, "Token could not be forced into value")
+	assert(result_value != nil, "Token could not be forced into value", loc)
 	return result_value
 }
 
-token_match_expression :: proc(root: ^Token, scope: ^Scope) -> ^Value
+token_match_call_arguments :: proc(token: ^Token, scope: ^Scope, builder: ^Function_Builder) -> [dynamic]^Value
 {
-	assert(root.type == .Paren || root.type == .Curly, "Root token was not the right type to match expressions")
-	
-	if len(root.children) == 0 do return nil
-	
-	retry: for
-	{
-		for expr, i in &root.children
-		{
-			if i > 0 && i + 1 < len(root.children) && expr.type == .Operator && expr.source == "+"
-			{
-				lhs := token_force_value(root.children[i - 1], scope)
-				rhs := token_force_value(root.children[i + 1], scope)
-				
-				result := Plus(lhs, rhs)
-				result_token := new_clone(Token \
-				{
-					type   = .Value,
-					parent = expr.parent,
-					source = expr.source,
-					data   = {value = result},
-				})
-				root.children[i - 1] = result_token
-				remove_range(&root.children, i, i + 2)
-				continue retry
-			}
-		}
-		break
-	}
-	
-	assert(len(root.children) == 1, "Expression could not be reduced to one value")
-	return token_force_value(root.children[0], scope)
+	// FIXME implement this
+	assert(len(token.children) == 0, "TODO Implement arguments to called functions!")
+	return make([dynamic]^Value, 0, 16)
 }
 
-Token_Match_Function :: struct
+token_value_make :: proc(parent: ^Token, result: ^Value, source_tokens: ..^Token) -> ^Token
 {
-	name:  string,
-	value: ^Value,
+	return new_clone(Token \
+	{
+		type   = .Value,
+		parent = parent,
+		source = combine_token_sources(..source_tokens),
+		data   = {value = result},
+	})
+}
+
+token_match_expression :: proc(token: ^Token, scope: ^Scope, builder: ^Function_Builder) -> ^Value
+{
+	assert(token.type == .Paren || token.type == .Curly, "Root token was not the right type to match expressions")
+	
+	if len(token.children) == 0 do return nil
+	
+	// Match Function Calls
+	state := &Token_Matcher_State{root = token}
+	for did_replace := true; did_replace;
+	{
+		did_replace = false
+		for i in 0 ..< len(token.children)
+		{
+			state.child_index = i
+			args_token := token_peek_match(state, 1, &Token{type = .Paren})
+			if args_token == nil do continue
+			maybe_target := token_peek(state, 0)
+			if maybe_target.type != .Id && maybe_target.type != .Paren do continue
+			
+			target := token_force_value(maybe_target, scope)
+			
+			args := token_match_call_arguments(args_token, scope, builder)
+			
+			result := call_function_value(builder, target, ..args[:])
+			result_token := token_value_make(token, result, ..token.children[i:i + 2])
+			token.children[i] = result_token
+			ordered_remove(&token.children, i + 1)
+			did_replace = true
+		}
+	}
+	
+	state = &Token_Matcher_State{root = token}
+	for did_replace := true; did_replace;
+	{
+		did_replace = false
+		for i in 0 ..< len(token.children)
+		{
+			state.child_index = i
+			plus_token := token_peek_match(state, 1, &Token{type = .Operator, source = "+"})
+			if plus_token == nil do continue
+			
+			lhs := token_force_value(token_peek(state, 0), scope)
+			rhs := token_force_value(token_peek(state, 2), scope)
+			
+			result := plus(builder, lhs, rhs)
+			result_token := token_value_make(token, result, ..token.children[i:i + 3])
+			token.children[i] = result_token
+			remove_range(&token.children, i + 1, i + 3)
+			did_replace = true
+		}
+	}
+	
+	assert(len(token.children) == 1, "Expression could not be reduced to one value")
+	return token_force_value(token.children[0], scope)
+}
+
+token_force_lazy_function_definition :: proc(lazy_function_definition: ^Lazy_Function_Definition) -> ^Value
+{
+	args           := lazy_function_definition.args
+	return_types   := lazy_function_definition.return_types
+	body           := lazy_function_definition.body
+	program        := lazy_function_definition.program
+	function_scope := scope_make(program.global_scope)
+	
+	value := Function(program)
+	{
+		builder := get_builder_from_context()
+		
+		if len(args.children) != 0
+		{
+			args_state: Token_Matcher_State = {root = args}
+			for
+			{
+				prev_child_index := args_state.child_index
+				arg := token_match_argument(&args_state, program)
+				if arg != nil
+				{
+					arg_value := Arg(program_lookup_type(program, arg.type_name))
+					scope_define_value(function_scope, arg.arg_name, arg_value)
+				}
+				if prev_child_index == args_state.child_index do break
+			}
+			assert(args_state.child_index == len(args.children), "Error while parsing args")
+		}
+		switch len(return_types.children)
+		{
+			case 0:
+			{
+				value.descriptor.function.returns = &void_value
+			}
+			case 1:
+			{
+				return_type_token := return_types.children[0]
+				assert(return_type_token.type == .Id, "Return type was not identifier")
+				
+				fn_return_descriptor(builder, program_lookup_type(program, return_type_token.source))
+			}
+			case 2:
+			{
+				assert(false, "Multiple return types are not supported at the moment")
+			}
+		}
+		fn_freeze(builder)
+		
+		body_result := token_match_expression(body, function_scope, builder)
+		
+		if body_result != nil
+		{
+			Return(body_result)
+		}
+	}
+	End_Function()
+	
+	return value
 }
 
 token_match_module :: proc(token: ^Token, program: ^Program)
@@ -496,69 +701,23 @@ token_match_module :: proc(token: ^Token, program: ^Program)
 			args         := token_peek_match(state, 0, &Token{type = .Paren})
 			return_types := token_peek_match(state, 2, &Token{type = .Paren})
 			body         := token_peek_match(state, 3, &Token{type = .Curly})
-			
 			// TODO show proper error to the user
 			assert(args != nil, "Function definition is missing args")
 			assert(return_types != nil, "Function definition is missing return type")
 			assert(body != nil, "Function definition is missing body")
 			
-			function_scope := scope_make(program.global_scope)
-			
-			value := Function(program)
-			{
-				builder := get_builder_from_context()
-				
-				if len(args.children) != 0
-				{
-					args_state: Token_Matcher_State = {root = args}
-					for
-					{
-						prev_child_index := args_state.child_index
-						arg := token_match_argument(&args_state, program)
-						if arg != nil
-						{
-							arg_value := Arg(program_lookup_type(program, arg.type_name))
-							scope_define(function_scope, arg.arg_name, arg_value)
-						}
-						if prev_child_index == args_state.child_index do break
-					}
-					assert(args_state.child_index == len(args.children), "Error while parsing args")
-				}
-				switch len(return_types.children)
-				{
-					case 0:
-					{
-						value.descriptor.function.returns = &void_value
-					}
-					case 1:
-					{
-						return_type_token := return_types.children[0]
-						assert(return_type_token.type == .Id, "Return type was not identifier")
-						
-						fn_return_descriptor(builder, program_lookup_type(program, return_type_token.source))
-					}
-					case 2:
-					{
-						assert(false, "Multiple return types are not supported at the moment")
-					}
-				}
-				fn_freeze(builder)
-				
-				body_result := token_match_expression(body, function_scope)
-				
-				if body_result != nil
-				{
-					Return(body_result)
-				}
-			}
-			End_Function()
-			
 			result_token := new_clone(Token \
 			{
-				type   = .Value,
+				type   = .Lazy_Function_Definition,
 				parent = token,
-				source = token.source, // FIXME
-				data   = {value = value},
+				source = combine_token_sources(args, arrow, return_types, body),
+				data   = {lazy_function_definition =
+				{
+					args         = args,
+					return_types = return_types,
+					body         = body,
+					program      = program,
+				}},
 			})
 			
 			token.children[i] = result_token
@@ -578,8 +737,9 @@ token_match_module :: proc(token: ^Token, program: ^Program)
 			if define == nil do continue
 			
 			name := token_peek_match(state, 0, &Token{type = .Id})
-			value := token_force_value(token_peek_match(state, 2, &Token{}), program.global_scope)
-			scope_define(program.global_scope, name.source, value)
+			value := token_peek(state, 2)
+			assert(value != nil, "Missing definition of global value")
+			scope_define_lazy(program.global_scope, name.source, value)
 			
 			remove_range(&token.children, i, i + 3)
 			did_replace = true

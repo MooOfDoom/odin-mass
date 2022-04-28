@@ -19,30 +19,39 @@ source_spec :: proc()
 	{
 		test := value_from_i64(42)
 		root_scope := scope_make()
-		scope_define(root_scope, "test", test)
-		check(scope_lookup(root_scope, "test") == test)
+		scope_define_value(root_scope, "test", test)
+		entry := scope_lookup(root_scope, "test")
+		check(entry.type == .Value)
+		check(entry.value == test)
 	})
 	
 	it("should be able to lookup things from parent scopes", proc()
 	{
 		global := value_from_i64(42)
 		root_scope := scope_make()
-		scope_define(root_scope, "global", global)
+		scope_define_value(root_scope, "global", global)
 		
 		level_1_test := value_from_i64(1);
 		scope_level_1 := scope_make(root_scope)
-		scope_define(scope_level_1, "test", level_1_test)
+		scope_define_value(scope_level_1, "test", level_1_test)
 		
 		level_2_test := value_from_i64(1);
 		scope_level_2 := scope_make(scope_level_1)
-		scope_define(scope_level_2, "test", level_2_test)
+		scope_define_value(scope_level_2, "test", level_2_test)
 		
-		check(scope_lookup(scope_level_2, "global") == global)
-		check(scope_lookup(scope_level_1, "global") == global)
-		check(scope_lookup(root_scope,    "global") == global)
-		check(scope_lookup(scope_level_2, "test")   == level_2_test)
-		check(scope_lookup(scope_level_1, "test")   == level_1_test)
-		check(scope_lookup(root_scope,    "test")   == nil)
+		global_2 := scope_lookup(scope_level_2, "global")
+		global_1 := scope_lookup(scope_level_1, "global")
+		global_r := scope_lookup(root_scope, "global")
+		test_2 := scope_lookup(scope_level_2, "test")
+		test_1 := scope_lookup(scope_level_1, "test")
+		test_r := scope_lookup(root_scope, "test")
+		
+		check(global_2.value == global)
+		check(global_1.value == global)
+		check(global_r.value == global)
+		check(test_2.value == level_2_test)
+		check(test_1.value == level_1_test)
+		check(test_r.type == nil)
 	})
 	
 	// Tokenizer

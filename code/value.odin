@@ -260,12 +260,6 @@ Function_Builder :: struct
 	result:       ^Value,
 }
 
-Scope :: struct
-{
-	parent: ^Scope,
-	items:  map[string]^Value,
-}
-
 Program :: struct
 {
 	data_buffer:      Buffer,
@@ -1042,32 +1036,4 @@ estimate_max_code_size_in_bytes :: proc(program: ^Program) -> int
 	// TODO this should be architecture-dependent
 	max_bytes_per_instruction :: 15
 	return total_instruction_count * max_bytes_per_instruction
-}
-
-scope_make :: proc(parent: ^Scope = nil) -> ^Scope
-{
-	return new_clone(Scope \
-	{
-		parent = parent,
-		items  = make(map[string]^Value),
-	})
-}
-
-scope_lookup :: proc(scope: ^Scope, name: string) -> ^Value
-{
-	scope := scope
-	
-	for scope != nil
-	{
-		result := scope.items[name]
-		if result != nil do return result
-		scope = scope.parent
-	}
-	return nil
-}
-
-scope_define :: proc(scope: ^Scope, name: string, value: ^Value)
-{
-	// TODO think about what should happen when trying to redefine existing thing
-	scope.items[name] = value
 }

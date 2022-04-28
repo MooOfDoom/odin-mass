@@ -74,8 +74,8 @@ function_spec :: proc()
 			global_scope     = scope_make(),
 		}
 		
-		scope_define(test_program.global_scope, "s32", &type_s32_value)
-		scope_define(test_program.global_scope, "s64", &type_s64_value)
+		scope_define_value(test_program.global_scope, "s32", &type_s32_value)
+		scope_define_value(test_program.global_scope, "s64", &type_s64_value)
 		
 		// NOTE(Lothar): Need to clear the fn_context so that its dynamic arrays don't continue to point
 		// into the freed temp buffer
@@ -97,10 +97,11 @@ function_spec :: proc()
 		check(result.type == .Success)
 		
 		token_match_module(result.root, &test_program)
-		program_end(&test_program)
 		
-		foo := scope_lookup(test_program.global_scope, "foo")
+		foo := scope_lookup_force(test_program.global_scope, "foo")
 		assert(foo != nil, "foo not found in global scope")
+		
+		program_end(&test_program)
 		
 		checker := value_as_function(foo, fn_void_to_i64)
 		check(checker() == 42)
@@ -114,10 +115,11 @@ function_spec :: proc()
 		check(result.type == .Success)
 		
 		token_match_module(result.root, &test_program)
-		program_end(&test_program)
 		
-		foo := scope_lookup(test_program.global_scope, "foo")
+		foo := scope_lookup_force(test_program.global_scope, "foo")
 		assert(foo != nil, "foo not found in global scope")
+		
+		program_end(&test_program)
 		
 		checker := value_as_function(foo, fn_i64_to_i64)
 		check(checker(42) == 42)
@@ -132,10 +134,11 @@ function_spec :: proc()
 		check(result.type == .Success)
 		
 		token_match_module(result.root, &test_program)
-		program_end(&test_program)
 		
-		plus := scope_lookup(test_program.global_scope, "plus")
+		plus := scope_lookup_force(test_program.global_scope, "plus")
 		assert(plus != nil, "plus not found in global scope")
+		
+		program_end(&test_program)
 		
 		checker := value_as_function(plus, fn_i64_i64_i64_to_i64)
 		check(checker(30, 10, 2) == 42)
@@ -145,24 +148,20 @@ function_spec :: proc()
 	it("should be able to parse and run multiple function definitions", proc()
 	{
 		source :=
-`one :: () -> (s64) { 1 }
-two :: () -> (s64) { 2 }`
+`proxy :: () -> (s64) { one() }
+one :: () -> (s64) { 1 }`
 		
 		result := tokenize("_test_.mass", source)
 		check(result.type == .Success)
 		
 		token_match_module(result.root, &test_program)
+		
+		proxy := scope_lookup_force(test_program.global_scope, "proxy")
+		assert(proxy != nil, "proxy not found in global scope")
+
 		program_end(&test_program)
 		
-		one := scope_lookup(test_program.global_scope, "one")
-		assert(one != nil, "one not found in global scope")
-		
-		check(value_as_function(one, fn_void_to_i64)() == 1)
-		
-		two := scope_lookup(test_program.global_scope, "two")
-		assert(two != nil, "two not found in global scope")
-		
-		check(value_as_function(two, fn_void_to_i64)() == 2)
+		check(value_as_function(proxy, fn_void_to_i64)() == 1)
 	})
 	
 	it("should write out an executable that exits with status code 42", proc()
