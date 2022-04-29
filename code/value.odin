@@ -471,6 +471,21 @@ value_from_i64 :: proc(integer: i64) -> ^Value
 	})
 }
 
+value_from_signed_immediate :: proc(value: $T) -> ^Value
+	where intrinsics.type_is_integer(T)
+{
+	if fits_into_i8(value)
+	{
+		return value_from_i8(i8(value))
+	}
+	// FIXME add value_from_i16
+	if fits_into_i32(value)
+	{
+		return value_from_i32(i32(value))
+	}
+	return value_from_i64(i64(value))
+}
+
 value_register_for_descriptor :: proc(reg: Register, descriptor: ^Descriptor) -> ^Value
 {
 	byte_size := descriptor_byte_size(descriptor)
@@ -615,6 +630,20 @@ same_type :: proc(a: ^Descriptor, b: ^Descriptor) -> bool
 same_value_type :: proc(a: ^Value, b: ^Value) -> bool
 {
 	return same_type(a.descriptor, b.descriptor)
+}
+
+same_value_type_or_can_implicitly_move_cast :: proc(target: ^Value, source: ^Value) -> bool
+{
+	if same_value_type(target, source) do return true
+	if target.descriptor.type != source.descriptor.type do return false
+	if target.descriptor.type == .Integer
+	{
+		if descriptor_byte_size(target.descriptor) > descriptor_byte_size(source.descriptor)
+		{
+			return true
+		}
+	}
+	return false
 }
 
 struct_byte_size :: proc(struct_: ^Descriptor_Struct) -> i32

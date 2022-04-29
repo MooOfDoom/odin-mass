@@ -527,7 +527,7 @@ token_force_value :: proc(token: ^Token, scope: ^Scope, loc := #caller_location)
 		value, ok := strconv.parse_int(token.source)
 		assert(ok, "Could not parse expression as int", loc)
 		// FIXME We should be able to size immediates automatically
-		result_value = value_from_i32(i32(value))
+		result_value = value_from_signed_immediate(value)
 	}
 	else if token.type == .Id
 	{
@@ -675,7 +675,7 @@ token_force_lazy_function_definition :: proc(lazy_function_definition: ^Lazy_Fun
 				return_type_token := return_types.children[0]
 				assert(return_type_token.type == .Id, "Return type was not identifier")
 				
-				fn_return_descriptor(builder, program_lookup_type(program, return_type_token.source))
+				fn_return_descriptor(builder, program_lookup_type(program, return_type_token.source), .Explicit)
 			}
 			case 2:
 			{
@@ -696,7 +696,7 @@ token_force_lazy_function_definition :: proc(lazy_function_definition: ^Lazy_Fun
 			body_result := token_match_expression(body, function_scope, builder)
 			if body_result != nil
 			{
-				Return(body_result)
+				fn_return(builder, body_result, .Implicit)
 			}
 		}
 	}

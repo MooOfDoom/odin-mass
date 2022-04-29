@@ -91,7 +91,7 @@ function_spec :: proc()
 	
 	it("should be able to parse a void -> s64 function", proc()
 	{
-		source := `foo :: () -> (s32) { 42 }`
+		source := `foo :: () -> (s64) { 42 }`
 		
 		result := tokenize("_test_.mass", source)
 		check(result.type == .Success)
@@ -103,7 +103,7 @@ function_spec :: proc()
 		
 		program_end(&test_program)
 		
-		checker := value_as_function(foo, fn_void_to_i32)
+		checker := value_as_function(foo, fn_void_to_i64)
 		check(checker() == 42)
 	})
 	
@@ -171,7 +171,7 @@ one :: () -> (s32) { 1 }`
 		// TODO Allow implicit conversion of last statement in a function body to void
 		source :=
 `main :: () -> () { ExitProcess(42) }
-ExitProcess :: (status: s32) -> () import("kernel32.dll", "ExitProcess")`
+ExitProcess :: (status: s32) -> (s64) import("kernel32.dll", "ExitProcess")`
 		
 		result := tokenize("_test_.mass", source)
 		check(result.type == .Success)

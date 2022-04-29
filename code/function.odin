@@ -33,65 +33,77 @@ is_memory_operand :: proc(operand: ^Operand) -> bool
 	        operand.type == .RIP_Relative)
 }
 
-move_value :: proc(builder: ^Function_Builder, a: ^Value, b: ^Value, loc := #caller_location)
+move_value :: proc(builder: ^Function_Builder, target: ^Value, source: ^Value, loc := #caller_location)
 {
 	// TODO figure out more type checking
-	a_size := descriptor_byte_size(a.descriptor)
-	b_size := descriptor_byte_size(b.descriptor)
+	target_size := descriptor_byte_size(target.descriptor)
+	source_size := descriptor_byte_size(source.descriptor)
 	
-	if is_memory_operand(&a.operand) && is_memory_operand(&b.operand)
+	if is_memory_operand(&target.operand) && is_memory_operand(&source.operand)
 	{
-		reg_a := value_register_for_descriptor(.A, a.descriptor)
-		move_value(builder, reg_a, b)
-		move_value(builder, a, reg_a)
+		reg_a := value_register_for_descriptor(.A, target.descriptor)
+		move_value(builder, reg_a, source)
+		move_value(builder, target, reg_a)
 		return
 	}
 	
-	if a_size != b_size
+	if target_size != source_size
 	{
-		if (a.operand.type == .Register &&
-		    b_size < a_size &&
-		    a_size <= 4)
+		if (target.operand.type == .Register &&
+		    source_size < target_size)
 		{
-			// TODO deal with unsigned numbers
-			push_instruction(builder, {movsx, {a.operand, b.operand, {}}, nil, loc})
-			return
+			if source_size == 4
+			{
+				// Will be handled below
+			}
+			else
+			{
+				// TODO deal with unsigned numbers
+				reg_a := value_register_for_descriptor(.A, source.descriptor)
+				push_instruction(builder, {mov, {reg_a.operand, source.operand, {}}, nil, loc})
+				push_instruction(builder, {movsx, {target.operand, reg_a.operand, {}}, nil, loc})
+				return
+			}
 		}
-		else if !(b.operand.type == .Immediate_32 && a_size == 8)
+		else if !(source.operand.type == .Immediate_32 && target_size == 8)
 		{
+			print_operand(&target.operand)
+			fmt.printf(" ")
+			print_operand(&source.operand)
+			fmt.println()
 			assert(false, "Mismatched operand size when moving")
 		}
 	}
 	
-	if (a.operand.type == .Register &&
-	    ((b.operand.type == .Immediate_8 && b.operand.imm8 == 0) ||
-	     (b.operand.type == .Immediate_32 && b.operand.imm32 == 0) ||
-	     (b.operand.type == .Immediate_64 && b.operand.imm64 == 0)))
+	if (target.operand.type == .Register &&
+	    ((source.operand.type == .Immediate_8 && source.operand.imm8 == 0) ||
+	     (source.operand.type == .Immediate_32 && source.operand.imm32 == 0) ||
+	     (source.operand.type == .Immediate_64 && source.operand.imm64 == 0)))
 	{
 		// This messes up flags register so comparisons need to be aware of this optimization
-		push_instruction(builder, {xor, {a.operand, a.operand, {}}, nil, loc})
+		push_instruction(builder, {xor, {target.operand, target.operand, {}}, nil, loc})
 		return
 	}
 	
-	if (b.operand.type == .Immediate_64 && b.operand.imm64 == i64(i32(b.operand.imm64)))
+	if (source.operand.type == .Immediate_64 && source.operand.imm64 == i64(i32(source.operand.imm64)))
 	{
-		move_value(builder, a, value_from_i32(i32(b.operand.imm64)))
+		move_value(builder, target, value_from_i32(i32(source.operand.imm64)))
 		return
 	}
 	
-	if ((b.operand.type == .Immediate_64 &&
-	     a.operand.type != .Register) ||
-	    (a.operand.type == .Memory_Indirect &&
-	     b.operand.type == .Memory_Indirect))
+	if ((source.operand.type == .Immediate_64 &&
+	     target.operand.type != .Register) ||
+	    (target.operand.type == .Memory_Indirect &&
+	     source.operand.type == .Memory_Indirect))
 	{
-		reg_a := value_register_for_descriptor(.A, a.descriptor)
+		reg_a := value_register_for_descriptor(.A, target.descriptor)
 		// TODO Can be a problem if RAX is already used as temp
-		move_value(builder, reg_a, b)
-		move_value(builder, a, reg_a)
+		move_value(builder, reg_a, source)
+		move_value(builder, target, reg_a)
 	}
 	else
 	{
-		push_instruction(builder, {mov, {a.operand, b.operand, {}}, nil, loc})
+		push_instruction(builder, {mov, {target.operand, source.operand, {}}, nil, loc})
 	}
 }
 
@@ -219,14 +231,17 @@ fn_arg :: proc(builder: ^Function_Builder, descriptor: ^Descriptor) -> ^Value
 	return function_push_argument(&builder.result.descriptor.function, descriptor)
 }
 
-fn_return_descriptor :: proc(builder: ^Function_Builder, descriptor: ^Descriptor, loc := #caller_location)
+Function_Return_Type :: enum
+{
+	Implicit,
+	Explicit,
+}
+
+fn_return_descriptor :: proc(builder: ^Function_Builder, descriptor: ^Descriptor, return_type: Function_Return_Type,
+                             loc := #caller_location)
 {
 	function := &builder.result.descriptor.function
-	if function.returns != nil
-	{
-		assert(same_type(function.returns.descriptor, descriptor), "Inconsistent return types in function")
-	}
-	else
+	if function.returns == nil
 	{
 		assert(!fn_is_frozen(builder), "Function builder was frozen during fn_return")
 		if descriptor.type != .Void
@@ -240,13 +255,22 @@ fn_return_descriptor :: proc(builder: ^Function_Builder, descriptor: ^Descriptor
 	}
 }
 
-fn_return :: proc(builder: ^Function_Builder, to_return: ^Value, loc := #caller_location)
+fn_return :: proc(builder: ^Function_Builder, to_return: ^Value, return_type: Function_Return_Type,
+                  loc := #caller_location)
 {
-	fn_return_descriptor(builder, to_return.descriptor, loc)
-	if to_return.descriptor.type != .Void
+	fn_return_descriptor(builder, to_return.descriptor, return_type, loc)
+	if builder.result.descriptor.function.returns.descriptor.type == .Void
+	{
+		if to_return.descriptor.type != .Void
+		{
+			assert(return_type == .Implicit, "Nonvoid explicit return in void function")
+		}
+	}
+	else
 	{
 		move_value(builder, builder.result.descriptor.function.returns, to_return)
 	}
+	
 	push_instruction(builder, {jmp, {label32(builder.epilog_label), {}, {}}, nil, loc})
 }
 
@@ -476,7 +500,7 @@ call_function_overload :: proc(builder: ^Function_Builder, to_call: ^Value, args
 	for arg, i in args
 	{
 		// FIXME add proper type checks for arguments
-		assert(same_value_type(descriptor.arguments[i], arg), "Argument types match")
+		assert(same_value_type_or_can_implicitly_move_cast(descriptor.arguments[i], arg), "Argument types match")
 		move_value(builder, descriptor.arguments[i], arg)
 	}
 	
@@ -525,7 +549,7 @@ call_function_value :: proc(builder: ^Function_Builder, to_call: ^Value, args: .
 		if len(args) != len(overload.descriptor.function.arguments) do continue
 		for arg, i in args
 		{
-			if !same_value_type(overload.descriptor.function.arguments[i], arg)
+			if !same_value_type_or_can_implicitly_move_cast(overload.descriptor.function.arguments[i], arg)
 			{
 				continue overload_loop
 			}
@@ -722,7 +746,7 @@ Return :: proc(to_return: ^Value, loc := #caller_location)
 {
 	builder := get_builder_from_context()
 	
-	fn_return(builder, to_return, loc)
+	fn_return(builder, to_return, .Explicit, loc)
 }
 
 Arg :: proc(descriptor: ^Descriptor) -> ^Value
