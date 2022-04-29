@@ -198,10 +198,17 @@ xor := X64_Mnemonic{name = "xor", encoding_list = xor_encoding_list[:]}
 ////////////////////////////////////////////////////////////////////////////////
 add_encoding_list := [?]Instruction_Encoding \
 {
+	encoding(0x00, _r, r_m8,  r_8),
+	encoding(0x01, _r, r_m16, r_16),
+	encoding(0x01, _r, r_m32, r_32),
+	encoding(0x01, _r, r_m64, r_64),
+	
+	encoding(0x02, _r, r_8,  r_m8),
 	encoding(0x03, _r, r_16, r_m16),
 	encoding(0x03, _r, r_32, r_m32),
 	encoding(0x03, _r, r_64, r_m64),
 	
+	encoding(0x80, _op_code(0), r_m8,  imm_8),
 	encoding(0x81, _op_code(0), r_m16, imm_16),
 	encoding(0x81, _op_code(0), r_m32, imm_32),
 	encoding(0x81, _op_code(0), r_m64, imm_32),

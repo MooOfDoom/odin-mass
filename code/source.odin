@@ -96,7 +96,7 @@ scope_lookup :: proc(scope: ^Scope, name: string) -> Scope_Entry
 	return Scope_Entry{}
 }
 
-scope_lookup_force :: proc(scope: ^Scope, name: string, loc := #caller_location) -> ^Value
+scope_lookup_force :: proc(scope: ^Scope, name: string, builder: ^Function_Builder = nil, loc := #caller_location) -> ^Value
 {
 	entry := scope_lookup(scope, name)
 	assert(entry.type != nil, "Name not found in scope", loc)
@@ -109,7 +109,7 @@ scope_lookup_force :: proc(scope: ^Scope, name: string, loc := #caller_location)
 		}
 		case .Lazy:
 		{
-			return token_force_value(entry.token, scope, loc)
+			return token_force_value(entry.token, scope, builder, loc)
 		}
 	}
 	return nil
@@ -445,24 +445,51 @@ tokenize :: proc(filename: string, source: string) -> Tokenizer_Result
 
 Token_Matcher_State :: struct
 {
-	root:        ^Token,
-	child_index: int,
+	tokens:      ^[dynamic]^Token,
+	start_index: int,
 }
 
 token_peek :: proc(state: ^Token_Matcher_State, peek_index: int) -> ^Token
 {
-	index := state.child_index + peek_index
-	if index >= len(state.root.children) do return nil
-	return state.root.children[index]
+	index := state.start_index + peek_index
+	if index >= len(state.tokens) do return nil
+	return state.tokens[index]
+}
+
+token_match :: proc(source: ^Token, pattern: ^Token) -> bool
+{
+	if pattern.type   != nil && pattern.type   != source.type   do return false
+	if pattern.source != ""  && pattern.source != source.source do return false
+	return true
 }
 
 token_peek_match :: proc(state: ^Token_Matcher_State, peek_index: int, pattern_token: ^Token) -> ^Token
 {
 	source_token := token_peek(state, peek_index)
-	if source_token == nil                                                       do return nil
-	if pattern_token.type != nil && pattern_token.type != source_token.type      do return nil
-	if pattern_token.source != "" && pattern_token.source != source_token.source do return nil
+	if source_token == nil                       do return nil
+	if !token_match(source_token, pattern_token) do return nil
 	return source_token
+}
+
+token_split :: proc(tokens: ^[dynamic]^Token, separator: ^Token) -> [dynamic]Token_Matcher_State
+{
+	result := make([dynamic]Token_Matcher_State, 0, 16)
+	
+	sequence := new_clone(make([dynamic]^Token, 0, 16))
+	for token, i in tokens
+	{
+		if token_match(token, separator)
+		{
+			append(&result, Token_Matcher_State{tokens = sequence})
+			sequence = new_clone(make([dynamic]^Token, 0, 16))
+		}
+		else
+		{
+			append(sequence, token)
+		}
+	}
+	append(&result, Token_Matcher_State{tokens = sequence})
+	return result
 }
 
 program_lookup_type :: proc(program: ^Program, type_name: string) -> ^Descriptor
@@ -502,6 +529,12 @@ Token_Match_Operator :: proc(state: ^Token_Matcher_State, peek_index: ^int, op: 
 	return Token_Match(state, peek_index, &Token{type = .Operator, source = op})
 }
 
+@(private="file")
+Token_Match_End :: proc(state: ^Token_Matcher_State, peek_index: int)
+{
+	assert(peek_index == len(state.tokens), "Did not match the right number of tokens")
+}
+
 token_match_argument :: proc(state: ^Token_Matcher_State, program: ^Program) -> ^Token_Match_Arg
 {
 	peek_index := 0
@@ -509,8 +542,7 @@ token_match_argument :: proc(state: ^Token_Matcher_State, program: ^Program) -> 
 	arg_id   := Token_Match(state, &peek_index, &Token{type = .Id}); if arg_id   == nil do return nil
 	colon    := Token_Match_Operator(state, &peek_index, ":");       if colon    == nil do return nil
 	arg_type := Token_Match(state, &peek_index, &Token{type = .Id}); if arg_type == nil do return nil
-	comma    := Maybe_Token_Match(state, &peek_index, &Token{type = .Operator, source = ","})
-	state.child_index += peek_index
+	Token_Match_End(state, peek_index)
 	
 	return new_clone(Token_Match_Arg \
 	{
@@ -519,7 +551,7 @@ token_match_argument :: proc(state: ^Token_Matcher_State, program: ^Program) -> 
 	})
 }
 
-token_force_value :: proc(token: ^Token, scope: ^Scope, loc := #caller_location) -> ^Value
+token_force_value :: proc(token: ^Token, scope: ^Scope, builder: ^Function_Builder, loc := #caller_location) -> ^Value
 {
 	result_value: ^Value
 	if token.type == .Integer
@@ -531,7 +563,7 @@ token_force_value :: proc(token: ^Token, scope: ^Scope, loc := #caller_location)
 	}
 	else if token.type == .Id
 	{
-		result_value = scope_lookup_force(scope, token.source, loc)
+		result_value = scope_lookup_force(scope, token.source, builder, loc)
 	}
 	else if token.type == .Value
 	{
@@ -540,6 +572,12 @@ token_force_value :: proc(token: ^Token, scope: ^Scope, loc := #caller_location)
 	else if token.type == .Lazy_Function_Definition
 	{
 		return token_force_lazy_function_definition(&token.lazy_function_definition)
+	}
+	else if token.type == .Paren
+	{
+		assert(builder != nil, "Parens forced to value without builder")
+		state: Token_Matcher_State = {tokens = &token.children}
+		return token_match_expression(&state, scope, builder)
 	}
 	else
 	{
@@ -552,88 +590,80 @@ token_force_value :: proc(token: ^Token, scope: ^Scope, loc := #caller_location)
 token_match_call_arguments :: proc(token: ^Token, scope: ^Scope, builder: ^Function_Builder) -> [dynamic]^Value
 {
 	result := make([dynamic]^Value, 0, 16)
-	if len(token.children) == 0
+	if len(token.children) != 0
 	{
-		// Nothing to do
-	}
-	else if len(token.children) == 1
-	{
-		value := token_force_value(token.children[0], scope)
-		append(&result, value)
-	}
-	else
-	{
-		// FIXME implement this
-		assert(false, "Not implemented")
+		argument_states := token_split(&token.children, &Token{type = .Operator, source = ","})
+		
+		for state, i in &argument_states
+		{
+			value := token_match_expression(&state, scope, builder)
+			append(&result, value)
+		}
 	}
 	return result
 }
 
-token_value_make :: proc(parent: ^Token, result: ^Value, source_tokens: ..^Token) -> ^Token
+token_value_make :: proc(original: ^Token, result: ^Value, source_tokens: ..^Token) -> ^Token
 {
 	return new_clone(Token \
 	{
 		type   = .Value,
-		parent = parent,
+		parent = original.parent,
 		source = combine_token_sources(..source_tokens),
 		data   = {value = result},
 	})
 }
 
-token_match_expression :: proc(token: ^Token, scope: ^Scope, builder: ^Function_Builder) -> ^Value
+token_match_expression :: proc(state: ^Token_Matcher_State, scope: ^Scope, builder: ^Function_Builder) -> ^Value
 {
-	assert(token.type == .Paren || token.type == .Curly, "Root token was not the right type to match expressions")
-	
-	if len(token.children) == 0 do return nil
+	if len(state.tokens) == 0 do return nil
 	
 	// Match Function Calls
-	state := &Token_Matcher_State{root = token}
 	for did_replace := true; did_replace;
 	{
 		did_replace = false
-		for i in 0 ..< len(token.children)
+		for i in 0 ..< len(state.tokens)
 		{
-			state.child_index = i
+			state.start_index = i
 			args_token := token_peek_match(state, 1, &Token{type = .Paren})
 			if args_token == nil do continue
 			maybe_target := token_peek(state, 0)
 			if maybe_target.type != .Id && maybe_target.type != .Paren do continue
 			
-			target := token_force_value(maybe_target, scope)
+			target := token_force_value(maybe_target, scope, builder)
 			
 			args := token_match_call_arguments(args_token, scope, builder)
 			
 			result := call_function_value(builder, target, ..args[:])
-			result_token := token_value_make(token, result, ..token.children[i:i + 2])
-			token.children[i] = result_token
-			ordered_remove(&token.children, i + 1)
+			result_token := token_value_make(args_token, result, ..state.tokens[i:i + 2])
+			state.tokens[i] = result_token
+			ordered_remove(state.tokens, i + 1)
 			did_replace = true
 		}
 	}
 	
-	state = &Token_Matcher_State{root = token}
 	for did_replace := true; did_replace;
 	{
 		did_replace = false
-		for i in 0 ..< len(token.children)
+		for i in 0 ..< len(state.tokens)
 		{
-			state.child_index = i
+			state.start_index = i
 			plus_token := token_peek_match(state, 1, &Token{type = .Operator, source = "+"})
 			if plus_token == nil do continue
 			
-			lhs := token_force_value(token_peek(state, 0), scope)
-			rhs := token_force_value(token_peek(state, 2), scope)
+			lhs := token_force_value(token_peek(state, 0), scope, builder)
+			rhs := token_force_value(token_peek(state, 2), scope, builder)
 			
 			result := plus(builder, lhs, rhs)
-			result_token := token_value_make(token, result, ..token.children[i:i + 3])
-			token.children[i] = result_token
-			remove_range(&token.children, i + 1, i + 3)
+			result_token := token_value_make(plus_token, result, ..state.tokens[i:i + 3])
+			state.tokens[i] = result_token
+			remove_range(state.tokens, i + 1, i + 3)
 			did_replace = true
 		}
 	}
 	
-	assert(len(token.children) == 1, "Expression could not be reduced to one value")
-	return token_force_value(token.children[0], scope)
+	assert(len(state.tokens) == 1, "Expression could not be reduced to one value")
+	return token_force_value(state.tokens[0], scope, builder)
 }
 
 token_force_lazy_function_definition :: proc(lazy_function_definition: ^Lazy_Function_Definition) -> ^Value
@@ -650,19 +680,15 @@ token_force_lazy_function_definition :: proc(lazy_function_definition: ^Lazy_Fun
 		
 		if len(args.children) != 0
 		{
-			args_state: Token_Matcher_State = {root = args}
-			for
+			argument_states := token_split(&args.children, &Token{type = .Operator, source = ","})
+			
+			for state, i in &argument_states
 			{
-				prev_child_index := args_state.child_index
-				arg := token_match_argument(&args_state, program)
-				if arg != nil
-				{
-					arg_value := Arg(program_lookup_type(program, arg.type_name))
-					scope_define_value(function_scope, arg.arg_name, arg_value)
-				}
-				if prev_child_index == args_state.child_index do break
+				arg := token_match_argument(&state, program)
+				assert(arg != nil, "Ill-formed function argument declaration")
+				arg_value := Arg(program_lookup_type(program, arg.type_name))
+				scope_define_value(function_scope, arg.arg_name, arg_value)
 			}
-			assert(args_state.child_index == len(args.children), "Error while parsing args")
 		}
 		switch len(return_types.children)
 		{
@@ -693,7 +719,17 @@ token_force_lazy_function_definition :: proc(lazy_function_definition: ^Lazy_Fun
 		}
 		else
 		{
-			body_result := token_match_expression(body, function_scope, builder)
+			body_result := &void_value
+			if len(body.children) != 0
+			{
+				body_statements := token_split(&body.children, &Token{type = .Operator, source = ";"})
+				
+				for state, i in &body_statements
+				{
+					body_result = token_match_expression(&state, function_scope, builder)
+				}
+			}
+			
 			if body_result != nil
 			{
 				fn_return(builder, body_result, .Implicit)
@@ -714,7 +750,7 @@ token_string_to_string :: proc(token: ^Token) -> string
 token_import_match_arguments :: proc(paren: ^Token, program: ^Program) -> ^Token
 {
 	assert(paren.type == .Paren, "Import arguments were not in parentheses")
-	state := &Token_Matcher_State{root = paren}
+	state := &Token_Matcher_State{tokens = &paren.children}
 	
 	library_name_string := token_peek_match(state, 0, &Token{type = .String})
 	assert(library_name_string != nil, "Import arguments missing the library name")
@@ -740,7 +776,7 @@ token_match_module :: proc(token: ^Token, program: ^Program)
 	assert(token.type == .Module, "Token was not a module")
 	if len(token.children) == 0 do return
 	
-	state := &Token_Matcher_State{root = token}
+	state := &Token_Matcher_State{tokens = &token.children}
 	
 	// Matching symbol imports
 	for did_replace := true; did_replace;
@@ -748,7 +784,7 @@ token_match_module :: proc(token: ^Token, program: ^Program)
 		did_replace = false
 		for i := 0; i < len(token.children); i += 1
 		{
-			state.child_index = i
+			state.start_index = i
 			
 			import_ := token_peek_match(state, 0, &Token{type = .Id, source = "import"})
 			if import_ == nil do continue
@@ -768,7 +804,7 @@ token_match_module :: proc(token: ^Token, program: ^Program)
 		did_replace = false
 		for i in 0 ..< len(token.children)
 		{
-			state.child_index = i
+			state.start_index = i
 			
 			arrow := token_peek_match(state, 1, &Token{type = .Operator, source = "->"})
 			if arrow == nil do continue
@@ -806,7 +842,7 @@ token_match_module :: proc(token: ^Token, program: ^Program)
 		did_replace = false
 		for i := 0; i < len(token.children); i += 1
 		{
-			state.child_index = i
+			state.start_index = i
 			
 			define := token_peek_match(state, 1, &Token{type = .Operator, source = "::"})
 			if define == nil do continue

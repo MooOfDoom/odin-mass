@@ -219,6 +219,8 @@ program_end :: proc(program: ^Program, loc := #caller_location) -> Jit_Program
 		fn_encode(&result.code_buffer, &builder, loc)
 	}
 	
+	if DEBUG_PRINT do print_buffer(result.code_buffer.memory[:result.code_buffer.occupied])
+	
 	// Making code executable
 	dummy: u32
 	win32.virtual_protect(&result.code_buffer.memory[0], uint(code_buffer_size), PAGE_EXECUTE_READ, &dummy)

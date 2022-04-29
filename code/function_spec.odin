@@ -148,8 +148,8 @@ function_spec :: proc()
 	it("should be able to parse and run multiple function definitions", proc()
 	{
 		source :=
-`proxy :: () -> (s32) { one() }
-one :: () -> (s32) { 1 }`
+`proxy :: () -> (s32) { plus(1, 2); plus((30 + 10), 2) }
+plus :: (x : s32, y : s32) -> (s32) { x + y }`
 		
 		result := tokenize("_test_.mass", source)
 		check(result.type == .Success)
@@ -161,10 +161,10 @@ one :: () -> (s32) { 1 }`
 
 		program_end(&test_program)
 		
-		check(value_as_function(proxy, fn_void_to_i64)() == 1)
+		check(value_as_function(proxy, fn_void_to_i32)() == 42)
 	})
 	
-	it("should write out an executable that exits with status code 0", proc()
+	it("should parse write out an executable that exits with status code 42", proc()
 	{
 		program := &test_program
 		
