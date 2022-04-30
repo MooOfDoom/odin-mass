@@ -198,6 +198,12 @@ void_value: Value =
 	operand    = {type = .None},
 }
 
+type_s8_descriptor: Descriptor =
+{
+	type = .Type,
+	data = {type_descriptor = &descriptor_i8},
+}
+
 type_s32_descriptor: Descriptor =
 {
 	type = .Type,
@@ -208,6 +214,12 @@ type_s64_descriptor: Descriptor =
 {
 	type = .Type,
 	data = {type_descriptor = &descriptor_i64},
+}
+
+type_s8_value: Value =
+{
+	descriptor = &type_s8_descriptor,
+	operand = {type = .None},
 }
 
 type_s32_value: Value =

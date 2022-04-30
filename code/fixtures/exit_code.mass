@@ -2,3 +2,4 @@ ExitProcess :: (status: s32) -> (s64) import("kernel32.dll", "ExitProcess")
 
 main :: () -> () {
 	ExitProcess(42)
+}

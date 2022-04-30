@@ -50,6 +50,7 @@ function_spec :: proc()
 			global_scope     = scope_make(),
 		}
 		
+		scope_define_value(test_program.global_scope, "s8", &type_s8_value)
 		scope_define_value(test_program.global_scope, "s32", &type_s32_value)
 		scope_define_value(test_program.global_scope, "s64", &type_s64_value)
 		
@@ -100,6 +101,24 @@ function_spec :: proc()
 		checker := value_as_function(foo, fn_i64_to_i64)
 		check(checker(42) == 42)
 		check(checker(21) == 21)
+	})
+	
+	it("should be able to define, assign and lookup an s64 variable on the stack", proc()
+	{
+		source := `foo :: () -> (s64) { y : s8; y = 10; x := 21; x = 32; x + y }`
+		
+		result := tokenize("_test_.mass", source)
+		check(result.type == .Success)
+		
+		token_match_module(result.root, &test_program)
+		
+		foo := scope_lookup_force(test_program.global_scope, "foo")
+		assert(foo != nil, "foo not found in global scope")
+		
+		program_end(&test_program)
+		
+		checker := value_as_function(foo, fn_void_to_i64)
+		check(checker() == 42)
 	})
 	
 	it("should be able to parse and run a plus function", proc()

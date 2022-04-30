@@ -729,6 +729,58 @@ token_rewrite_constant_definitions :: proc(state: ^Token_Matcher_State, program:
 	return true
 }
 
+token_rewrite_definition_and_assignment_statements :: proc(state: ^Token_Matcher_State, scope: ^Scope,
+                                                           builder: ^Function_Builder) -> bool
+{
+	peek_index := 0
+	name        := Token_Match(state, &peek_index, &Token{type = .Id}); if name        == nil do return false
+	define      := Token_Match_Operator(state, &peek_index, ":=");      if define      == nil do return false
+	token_value := Token_Match(state, &peek_index, &Token{});           if token_value == nil do return false
+	
+	value := token_force_value(token_value, scope, builder)
+	var := Stack(value.descriptor, value)
+	scope_define_value(scope, name.source, var)
+	
+	// FIXME definition should rewrite with a token so that we can do proper
+	// checking inside statements and maybe pass it around.
+	token_replace_tokens_in_state(state, 3)
+	return true
+}
+
+token_rewrite_definitions :: proc(state: ^Token_Matcher_State, scope: ^Scope, builder: ^Function_Builder) -> bool
+{
+	peek_index := 0
+	name       := Token_Match(state, &peek_index, &Token{type = .Id}); if name       == nil do return false
+	define     := Token_Match_Operator(state, &peek_index, ":");       if define     == nil do return false
+	token_type := Token_Match(state, &peek_index, &Token{type = .Id}); if token_type == nil do return false
+	
+	descriptor := program_lookup_type(builder.program, token_type.source)
+	var := Stack(descriptor)
+	scope_define_value(scope, name.source, var)
+	
+	// FIXME definition should rewrite with a token so that we can do proper
+	// checking inside statements and maybe pass it around.
+	token_replace_tokens_in_state(state, 3)
+	return true
+}
+
+token_rewrite_assignments :: proc(state: ^Token_Matcher_State, scope: ^Scope, builder: ^Function_Builder) -> bool
+{
+	peek_index := 0
+	name        := Token_Match(state, &peek_index, &Token{type = .Id}); if name        == nil do return false
+	define      := Token_Match_Operator(state, &peek_index, "=");       if define      == nil do return false
+	token_value := Token_Match(state, &peek_index, &Token{});           if token_value == nil do return false
+	
+	value  := token_force_value(token_value, scope, builder)
+	target := scope_lookup_force(scope, name.source, builder)
+	Assign(target, value)
+	
+	// FIXME definition should rewrite with a token so that we can do proper
+	// checking inside statements and maybe pass it around.
+	token_replace_tokens_in_state(state, 3)
+	return true
+}
+
 token_string_to_string :: proc(token: ^Token) -> string
 {
 	assert(len(token.source) >= 2, "String does not have quotation marks")
@@ -838,6 +890,9 @@ token_match_expression :: proc(state: ^Token_Matcher_State, scope: ^Scope, build
 	token_rewrite(state, builder.program, token_rewrite_functions)
 	token_rewrite_expression(state, scope, builder, token_rewrite_function_calls)
 	token_rewrite_expression(state, scope, builder, token_rewrite_plus)
+	token_rewrite_expression(state, scope, builder, token_rewrite_definition_and_assignment_statements)
+	token_rewrite_expression(state, scope, builder, token_rewrite_assignments)
+	token_rewrite_expression(state, scope, builder, token_rewrite_definitions)
 	token_rewrite(state, builder.program, token_rewrite_constant_definitions)
 	
 	switch len(state.tokens)
