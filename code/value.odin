@@ -444,6 +444,28 @@ stack :: proc(offset: i32, byte_size: i32) -> Operand
 	return Operand{type = .Memory_Indirect, byte_size = byte_size, data = {indirect = {reg = .SP, displacement = offset}}}
 }
 
+operand_immediate_as_i64 :: proc(operand: ^Operand) -> i64
+{
+	if operand.type == .Immediate_8  do return i64(operand.imm8)
+	if operand.type == .Immediate_32 do return i64(operand.imm32)
+	if operand.type == .Immediate_64 do return operand.imm64
+	assert(false, "Expected an immediate operand")
+	return 0
+}
+
+operand_is_memory :: proc(operand: ^Operand) -> bool
+{
+	return (operand.type == .Memory_Indirect ||
+	        operand.type == .RIP_Relative)
+}
+
+operand_is_immediate :: proc(operand: ^Operand) -> bool
+{
+	return (operand.type == .Immediate_8  ||
+	        operand.type == .Immediate_32 ||
+	        operand.type == .Immediate_64)
+}
+
 value_from_i8 :: proc(integer: i8) -> ^Value
 {
 	return new_clone(Value \

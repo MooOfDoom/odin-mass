@@ -51,7 +51,7 @@ source_spec :: proc()
 		check(global_r.value == global)
 		check(test_2.value == level_2_test)
 		check(test_1.value == level_1_test)
-		check(test_r.type == nil)
+		check(test_r == nil)
 	})
 	
 	// Tokenizer

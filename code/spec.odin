@@ -3,7 +3,7 @@ package main
 import "core:fmt"
 import "core:mem"
 
-DEBUG_PRINT :: false
+DEBUG_PRINT :: true
 
 fn_reflect :: proc(builder: ^Function_Builder, descriptor: ^Descriptor) -> ^Value
 {
@@ -202,11 +202,9 @@ create_is_character_in_set_checker_fn :: proc(characters: string) -> fn_type_i32
 		character := Arg_i32()
 		for ch in characters
 		{
-			If(Eq(character, value_from_i32(i32(ch))))
-			{
+			if(If(Eq(character, value_from_i32(i32(ch))))) {
 				Return(value_from_i8(1))
-			}
-			End_If()
+			End_If()}
 		}
 		Return(value_from_i8(0))
 	}
@@ -406,12 +404,10 @@ mass_spec :: proc()
 			option_value := Arg(descriptor_pointer_to(&option_i64_descriptor))
 			default_value := Arg_i64()
 			some := MaybeCastToTag("Some", option_value)
-			If(some)
-			{
+			if(If(some)) {
 				value := StructField(some, "value")
 				Return(value)
-			}
-			End_If()
+			End_If()}
 			Return(default_value)
 		}
 		End_Function()
@@ -533,11 +529,9 @@ mass_spec :: proc()
 				// TODO check that the descriptor is indeed an array
 				length := i32(array_pointer_descriptor.pointer_to.array.length)
 				
-				If(Greater(index, value_from_i32(length - 1)))
-				{
+				if(If(Greater(index, value_from_i32(length - 1)))) {
 					Break()
-				}
-				End_If()
+				End_If()}
 				
 				reg_a := value_register_for_descriptor(.A, array_pointer_descriptor)
 				move_value(builder, reg_a, temp)

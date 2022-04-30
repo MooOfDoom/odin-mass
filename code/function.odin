@@ -27,10 +27,16 @@ push_instruction :: proc(builder: ^Function_Builder, instruction: Instruction)
 	append(&builder.instructions, instruction)
 }
 
-is_memory_operand :: proc(operand: ^Operand) -> bool
+ensure_register_or_memory :: proc(builder: ^Function_Builder, value: ^Value) -> ^Value
 {
-	return (operand.type == .Memory_Indirect ||
-	        operand.type == .RIP_Relative)
+	assert(value.operand.type != .None, "Expected valid operand type")
+	if operand_is_immediate(&value.operand)
+	{
+		result := value_register_for_descriptor(.A, value.descriptor)
+		move_value(builder, result, value)
+		return result
+	}
+	return value
 }
 
 move_value :: proc(builder: ^Function_Builder, target: ^Value, source: ^Value, loc := #caller_location)
@@ -39,33 +45,38 @@ move_value :: proc(builder: ^Function_Builder, target: ^Value, source: ^Value, l
 	target_size := descriptor_byte_size(target.descriptor)
 	source_size := descriptor_byte_size(source.descriptor)
 	
-	if is_memory_operand(&target.operand) && is_memory_operand(&source.operand)
-	{
-		reg_a := value_register_for_descriptor(.A, target.descriptor)
-		move_value(builder, reg_a, source)
-		move_value(builder, target, reg_a)
-		return
-	}
-	
 	if target_size != source_size
 	{
-		if (target.operand.type == .Register &&
-		    source_size < target_size)
+		if source_size < target_size
 		{
-			if source_size == 4
+			// TODO deal with unsigned numbers
+			source_rm := ensure_register_or_memory(builder, source)
+			if target.operand.type == .Register
 			{
-				// Will be handled below
+				if source_size == 4
+				{
+					adjusted_target: Operand =
+					{
+						type      = .Register,
+						byte_size = 4,
+						data      = {reg = target.operand.reg},
+					}
+					push_instruction(builder, {mov, {adjusted_target, source_rm.operand, {}}, nil, loc})
+				}
+				else
+				{
+					push_instruction(builder, {movsx, {target.operand, source_rm.operand, {}}, nil, loc})
+				}
 			}
 			else
 			{
-				// TODO deal with unsigned numbers
-				reg_a := value_register_for_descriptor(.A, source.descriptor)
-				push_instruction(builder, {mov, {reg_a.operand, source.operand, {}}, nil, loc})
-				push_instruction(builder, {movsx, {target.operand, reg_a.operand, {}}, nil, loc})
-				return
+				reg_a := value_register_for_descriptor(.A, target.descriptor)
+				push_instruction(builder, {movsx, {reg_a.operand, source_rm.operand, {}}, nil, loc})
+				push_instruction(builder, {mov, {target.operand, reg_a.operand, {}}, nil, loc})
 			}
+			return
 		}
-		else if !(source.operand.type == .Immediate_32 && target_size == 8)
+		else
 		{
 			print_operand(&target.operand)
 			fmt.printf(" ")
@@ -73,6 +84,14 @@ move_value :: proc(builder: ^Function_Builder, target: ^Value, source: ^Value, l
 			fmt.println()
 			assert(false, "Mismatched operand size when moving")
 		}
+	}
+	
+	if operand_is_memory(&target.operand) && operand_is_memory(&source.operand)
+	{
+		reg_a := value_register_for_descriptor(.A, target.descriptor)
+		move_value(builder, reg_a, source, loc)
+		move_value(builder, target, reg_a, loc)
+		return
 	}
 	
 	if (target.operand.type == .Register &&
@@ -85,11 +104,11 @@ move_value :: proc(builder: ^Function_Builder, target: ^Value, source: ^Value, l
 		return
 	}
 	
-	if (source.operand.type == .Immediate_64 && source.operand.imm64 == i64(i32(source.operand.imm64)))
-	{
-		move_value(builder, target, value_from_i32(i32(source.operand.imm64)))
-		return
-	}
+	// if (source.operand.type == .Immediate_64 && source.operand.imm64 == i64(i32(source.operand.imm64)))
+	// {
+	// 	move_value(builder, target, value_from_i32(i32(source.operand.imm64)), loc)
+	// 	return
+	// }
 	
 	if ((source.operand.type == .Immediate_64 &&
 	     target.operand.type != .Register) ||
@@ -98,8 +117,8 @@ move_value :: proc(builder: ^Function_Builder, target: ^Value, source: ^Value, l
 	{
 		reg_a := value_register_for_descriptor(.A, target.descriptor)
 		// TODO Can be a problem if RAX is already used as temp
-		move_value(builder, reg_a, source)
-		move_value(builder, target, reg_a)
+		move_value(builder, reg_a, source, loc)
+		move_value(builder, target, reg_a, loc)
 	}
 	else
 	{
@@ -289,6 +308,41 @@ Arithmetic_Operation :: enum
 {
 	Plus,
 	Minus,
+	Times,
+	Divide,
+}
+
+maybe_constant_fold :: proc(a: ^Value, b: ^Value, operation: Arithmetic_Operation) -> ^Value
+{
+	if operand_is_immediate(&a.operand) && operand_is_immediate(&b.operand)
+	{
+		a_i64 := operand_immediate_as_i64(&a.operand)
+		b_i64 := operand_immediate_as_i64(&b.operand)
+		switch operation
+		{
+			case .Plus:
+			{
+				return value_from_signed_immediate(a_i64 + b_i64)
+			}
+			case .Minus:
+			{
+				return value_from_signed_immediate(a_i64 - b_i64)
+			}
+			case .Times:
+			{
+				return value_from_signed_immediate(a_i64 * b_i64)
+			}
+			case .Divide:
+			{
+				return value_from_signed_immediate(a_i64 / b_i64)
+			}
+			case:
+			{
+				assert(false, "Unknown arithmetic operation")
+			}
+		}
+	}
+	return nil
 }
 
 plus_or_minus :: proc(builder: ^Function_Builder, operation: Arithmetic_Operation, a: ^Value, b: ^Value, loc := #caller_location) -> ^Value
@@ -301,9 +355,11 @@ plus_or_minus :: proc(builder: ^Function_Builder, operation: Arithmetic_Operatio
 		assert(a.descriptor.type == .Integer, "Plus/minus only works with integers")
 	}
 	
-	// TODO type check values
 	assert_not_register_ax(a)
 	assert_not_register_ax(b)
+	
+	result := maybe_constant_fold(a, b, operation)
+	if result != nil do return result
 	
 	temp_b := reserve_stack(builder, b.descriptor)
 	move_value(builder, temp_b, b)
@@ -311,7 +367,7 @@ plus_or_minus :: proc(builder: ^Function_Builder, operation: Arithmetic_Operatio
 	reg_a := value_register_for_descriptor(.A, a.descriptor)
 	move_value(builder, reg_a, a)
 	
-	switch operation
+	#partial switch operation
 	{
 		case .Plus:
 		{
@@ -352,6 +408,9 @@ multiply :: proc(builder: ^Function_Builder, x: ^Value, y: ^Value, loc := #calle
 	assert_not_register_ax(x)
 	assert_not_register_ax(y)
 	
+	result := maybe_constant_fold(x, y, .Times)
+	if result != nil do return result
+	
 	// TODO ceal with signed / unsigned
 	// TODO support double the size of the result?
 	// TODO make the move only for imm value
@@ -380,6 +439,14 @@ divide :: proc(builder: ^Function_Builder, a: ^Value, b: ^Value, loc := #caller_
 	// TODO type check values
 	assert_not_register_ax(a)
 	assert_not_register_ax(b)
+	
+	if operand_is_immediate(&a.operand) && operand_is_immediate(&b.operand)
+	{
+		dividend := operand_immediate_as_i64(&a.operand)
+		divisor  := operand_immediate_as_i64(&b.operand)
+		assert(divisor != 0, "Divide by zero")
+		return value_from_signed_immediate(dividend / divisor)
+	}
 	
 	// Save RDX as it will be used for the remainder
 	rdx_temp := reserve_stack(builder, &descriptor_i64)
@@ -433,16 +500,52 @@ Compare :: enum
 	Greater,
 }
 
+maybe_constant_compare :: proc(a: ^Value, b: ^Value, operation: Compare) -> ^Value
+{
+	if operand_is_immediate(&a.operand) && operand_is_immediate(&b.operand)
+	{
+		a_i64 := operand_immediate_as_i64(&a.operand)
+		b_i64 := operand_immediate_as_i64(&b.operand)
+		switch operation
+		{
+			case .Equal:
+			{
+				return value_from_i8(i8(a_i64 == b_i64))
+			}
+			case .Not_Equal:
+			{
+				return value_from_i8(i8(a_i64 != b_i64))
+			}
+			case .Less:
+			{
+				return value_from_i8(i8(a_i64 < b_i64))
+			}
+			case .Greater:
+			{
+				return value_from_i8(i8(a_i64 > b_i64))
+			}
+			case:
+			{
+				assert(false, "Unsupported comparison")
+			}
+		}
+	}
+	return nil
+}
+
 compare :: proc(builder: ^Function_Builder, operation: Compare, a: ^Value, b: ^Value, loc := #caller_location) -> ^Value
 {
 	assert(same_value_type(a, b), "Types match in compare")
 	assert(a.descriptor.type == .Integer, "Can only compare integers")
 	
+	const_result := maybe_constant_compare(a, b, operation)
+	if const_result != nil do return const_result
+	
 	temp_b := reserve_stack(builder, b.descriptor)
-	move_value(builder, temp_b, b)
+	move_value(builder, temp_b, b, loc)
 	
 	reg_a := value_register_for_descriptor(.A, a.descriptor)
-	move_value(builder, reg_a, a)
+	move_value(builder, reg_a, a, loc)
 	
 	push_instruction(builder, {cmp, {reg_a.operand, temp_b.operand, {}}, nil, loc})
 	
@@ -543,20 +646,58 @@ call_function_overload :: proc(builder: ^Function_Builder, to_call: ^Value, args
 	return descriptor.returns
 }
 
-call_function_value :: proc(builder: ^Function_Builder, to_call: ^Value, args: ..^Value) -> ^Value
+Overload_Match :: struct
+{
+	value: ^Value,
+	score: int,
+}
+
+calculate_arguments_match_score :: proc(descriptor: ^Descriptor_Function, arguments: []^Value) -> int
+{
+	Score_Exact :: 100000
+	Score_Cast  :: 1
+	
+	score := 0
+	for source_arg, i in arguments
+	{
+		target_arg := descriptor.arguments[i]
+		if same_value_type(target_arg, source_arg)
+		{
+			score += Score_Exact
+		}
+		else if same_value_type_or_can_implicitly_move_cast(target_arg, source_arg)
+		{
+			score += Score_Cast
+		}
+		else
+		{
+			return -1
+		}
+	}
+	return score
+}
+
+call_function_value :: proc(builder: ^Function_Builder, to_call: ^Value, arguments: ..^Value) -> ^Value
 {
 	assert(to_call.descriptor.type == .Function, "Value to call must be a function")
+	
+	match: Overload_Match = {score = -1}
 	overload_loop: for overload := to_call; overload != nil; overload = overload.descriptor.function.next_overload
 	{
-		if len(args) != len(overload.descriptor.function.arguments) do continue
-		for arg, i in args
+		descriptor := &overload.descriptor.function
+		if len(arguments) != len(descriptor.arguments) do continue
+		score := calculate_arguments_match_score(descriptor, arguments)
+		if score > match.score
 		{
-			if !same_value_type_or_can_implicitly_move_cast(overload.descriptor.function.arguments[i], arg)
-			{
-				continue overload_loop
-			}
+			// FIXME think about same scores
+			match.value = overload
+			match.score = score
 		}
-		return call_function_overload(builder, overload, ..args)
+		
+	}
+	if match.value != nil
+	{
+		return call_function_overload(builder, match.value, ..arguments)
 	}
 	assert(false, "No matching overload found")
 	return nil
@@ -574,22 +715,33 @@ goto :: proc(builder: ^Function_Builder, label: ^Label, loc := #caller_location)
 
 make_if :: proc(builder: ^Function_Builder, value: ^Value, loc := #caller_location) -> ^Label
 {
-	label := make_label()
-	byte_size := descriptor_byte_size(value.descriptor)
-	if byte_size == 4 || byte_size == 8
+	is_always_true := false
+	if operand_is_immediate(&value.operand)
 	{
-		push_instruction(builder, {cmp, {value.operand, imm32(0), {}}, nil, loc})
-	}
-	else if byte_size == 1
-	{
-		push_instruction(builder, {cmp, {value.operand, imm8(0), {}}, nil, loc})
-	}
-	else
-	{
-		assert(false, "Unsupported value inside `if`")
+		imm := operand_immediate_as_i64(&value.operand)
+		if imm == 0 do return nil
+		is_always_true = true
 	}
 	
-	push_instruction(builder, {jz, {label32(label), {}, {}}, nil, loc})
+	label := make_label()
+	if !is_always_true
+	{
+		byte_size := descriptor_byte_size(value.descriptor)
+		if byte_size == 4 || byte_size == 8
+		{
+			push_instruction(builder, {cmp, {value.operand, imm32(0), {}}, nil, loc})
+		}
+		else if byte_size == 1
+		{
+			push_instruction(builder, {cmp, {value.operand, imm8(0), {}}, nil, loc})
+		}
+		else
+		{
+			assert(false, "Unsupported value inside `if`")
+		}
+		
+		push_instruction(builder, {jz, {label32(label), {}, {}}, nil, loc})
+	}
 	return label
 }
 
@@ -863,13 +1015,15 @@ Goto :: proc(label: ^Label, loc := #caller_location)
 	goto(builder, label, loc)
 }
 
-If :: proc(value: ^Value, loc := #caller_location)
+If :: proc(value: ^Value, loc := #caller_location) -> bool
 {
 	builder  := get_builder_from_context()
 	if_stack := get_if_stack_from_context()
 	
 	label := make_if(builder, value, loc)
+	if label == nil do return false
 	append(if_stack, label)
+	return true
 }
 
 End_If :: proc(loc := #caller_location)

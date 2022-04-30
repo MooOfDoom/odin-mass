@@ -147,9 +147,9 @@ function_spec :: proc()
 	
 	it("should be able to parse and run multiple function definitions", proc()
 	{
-		source :=
-`proxy :: () -> (s32) { plus(1, 2); plus((30 + 10), 2) }
-plus :: (x : s32, y : s32) -> (s32) { x + y }`
+		source := `
+proxy :: ()                 -> (s32) { plus(1, 2); plus(30 + 10, 2) }
+plus  :: (x : s32, y : s32) -> (s32) { x + y }`
 		
 		result := tokenize("_test_.mass", source)
 		check(result.type == .Success)
@@ -164,13 +164,95 @@ plus :: (x : s32, y : s32) -> (s32) { x + y }`
 		check(value_as_function(proxy, fn_void_to_i32)() == 42)
 	})
 	
+	it("should be able to define a local function", proc()
+	{
+		program := &test_program
+		
+		source := `
+checker :: () -> (s64)
+{
+	local :: () -> (s64) { 42 };
+	local()
+}`
+		
+		result := tokenize("_test_.mass", source)
+		check(result.type == .Success)
+		
+		token_match_module(result.root, program)
+		
+		checker := scope_lookup_force(program.global_scope, "checker")
+		assert(checker != nil, "checker not found in global scope")
+
+		program_end(program)
+		
+		answer := value_as_function(checker, fn_void_to_i64)()
+		check(answer == 42)
+	})
+	
+	it("should be able to parse and run functions with overloads", proc()
+	{
+		program := &test_program
+		
+		source := `
+size_of     :: (x : s32) -> (s64) { 4 }
+size_of     :: (x : s64) -> (s64) { 8 }
+checker_s64 :: (x : s64) -> (s64) { size_of(x) }
+checker_s32 :: (x : s32) -> (s64) { size_of(x) }`
+		
+		result := tokenize("_test_.mass", source)
+		check(result.type == .Success)
+		
+		token_match_module(result.root, program)
+		
+		checker_s64 := scope_lookup_force(program.global_scope, "checker_s64")
+		checker_s32 := scope_lookup_force(program.global_scope, "checker_s32")
+		assert(checker_s64 != nil, "checker_s64 not found in global scope")
+		assert(checker_s32 != nil, "checker_s32 not found in global scope")
+
+		program_end(program)
+		
+		{
+			size := value_as_function(checker_s64, fn_i64_to_i64)(0)
+			check(size == 8)
+		}
+		{
+			size := value_as_function(checker_s32, fn_i32_to_i64)(0)
+			check(size == 4)
+		}
+	})
+	
+	it("should be able to parse and run functions with local overloads", proc()
+	{
+		program := &test_program
+		
+		source := `
+size_of :: (x : s32) -> (s64) { 4 }
+checker :: (x : s32) -> (s64)
+{
+	size_of :: (x : s64) -> (s64) { 8 };
+	size_of(x)
+}`
+		
+		result := tokenize("_test_.mass", source)
+		check(result.type == .Success)
+		
+		token_match_module(result.root, program)
+		
+		checker := scope_lookup_force(program.global_scope, "checker")
+
+		program_end(program)
+		
+		size := value_as_function(checker, fn_i32_to_i64)(0)
+		check(size == 4)
+	})
+	
 	it("should parse write out an executable that exits with status code 42", proc()
 	{
 		program := &test_program
 		
 		// TODO Allow implicit conversion of last statement in a function body to void
-		source :=
-`main :: () -> () { ExitProcess(42) }
+		source := `
+main :: () -> () { ExitProcess(42) }
 ExitProcess :: (status: s32) -> (s64) import("kernel32.dll", "ExitProcess")`
 		
 		result := tokenize("_test_.mass", source)
@@ -477,17 +559,43 @@ ExitProcess :: (status: s32) -> (s64) import("kernel32.dll", "ExitProcess")`
 		check(result == 43)
 	})
 	
+	it("should correctly handle constant conditions", proc()
+	{
+		checker_value := Function()
+		{
+			if(If(Eq(value_from_i32(1), value_from_i32(0)))) {
+				Return(value_from_i32(0))
+			End_If()}
+			
+			if(If(Eq(value_from_i32(1), value_from_i32(1)))) {
+				Return(value_from_i32(1))
+			End_If()}
+			
+			Return(value_from_i32(-1))
+			
+			builder := get_builder_from_context()
+			for instruction in builder.instructions
+			{
+				check(instruction.mnemonic.name != "cmp")
+			}
+		}
+		End_Function()
+		program_end(&test_program)
+		
+		checker := value_as_function(checker_value, fn_void_to_i32)
+		result := checker()
+		check(result == 1)
+	})
+	
 	it("should have a function that returns 0 if arg is zero, 1 otherwise", proc()
 	{
 		is_non_zero_value := Function()
 		{
 			x := Arg_i32()
 			
-			If(Eq(x, value_from_i32(0)))
-			{
+			if(If(Eq(x, value_from_i32(0)))) {
 				Return(value_from_i32(0))
-			}
-			End_If()
+			End_If()}
 			
 			Return(value_from_i32(1))
 		}
@@ -718,16 +826,13 @@ ExitProcess :: (status: s32) -> (s64) import("kernel32.dll", "ExitProcess")`
 		fib := Function()
 		{
 			n := Arg_i64()
-			If(Eq(n, value_from_i64(0)))
-			{
+			if(If(Eq(n, value_from_i64(0)))) {
 				Return(value_from_i64(0))
-			}
-			End_If()
-			If(Eq(n, value_from_i64(1)))
-			{
+			End_If()}
+			
+			if(If(Eq(n, value_from_i64(1)))) {
 				Return(value_from_i64(1))
-			}
-			End_If()
+			End_If()}
 			
 			minus_one := Minus(n, value_from_i64(1))
 			minus_two := Minus(n, value_from_i64(2))
