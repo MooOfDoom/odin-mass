@@ -675,6 +675,66 @@ token_value_make :: proc(original: ^Token, result: ^Value, source_tokens: ..^Tok
 	})
 }
 
+token_replace_tokens_in_state :: proc(state: ^Token_Matcher_State, length: int, token: ^Token = nil)
+{
+	length := length
+	
+	from := state.start_index
+	if token != nil
+	{
+		state.tokens[from] = token
+		from += 1
+		length -= 1
+	}
+	remove_range(state.tokens, from, from + length)
+}
+
+token_rewrite_functions :: proc(state: ^Token_Matcher_State, program: ^Program) -> bool
+{
+	peek_index := 0
+	args          := Token_Match(state, &peek_index, &Token{type = .Paren}); if args         == nil do return false
+	arrow         := Token_Match_Operator(state, &peek_index, "->");         if arrow        == nil do return false
+	return_types  := Token_Match(state, &peek_index, &Token{type = .Paren}); if return_types == nil do return false
+	body          := Token_Match(state, &peek_index, &Token{});              if body         == nil do return false
+	
+	result_token := new_clone(Token \
+	{
+		type   = .Lazy_Function_Definition,
+		parent = arrow.parent,
+		source = combine_token_sources(args, arrow, return_types, body),
+		data   = {lazy_function_definition =
+		{
+			args         = args,
+			return_types = return_types,
+			body         = body,
+			program      = program,
+		}},
+	})
+	
+	token_replace_tokens_in_state(state, 4, result_token)
+	return true
+}
+
+token_rewrite_constant_definitions :: proc(state: ^Token_Matcher_State, program: ^Program) -> bool
+{
+	peek_index := 0
+	name   := Token_Match(state, &peek_index, &Token{type = .Id}); if name   == nil do return false
+	define := Token_Match_Operator(state, &peek_index, "::");      if define == nil do return false
+	value  := Token_Match(state, &peek_index, &Token{});           if value  == nil do return false
+	scope_define_lazy(program.global_scope, name.source, value)
+	
+	// FIXME definition should rewrite with a token so that we can do proper
+	// checking inside statements and maybe pass it around.
+	token_replace_tokens_in_state(state, 3)
+	return true
+}
+
+token_string_to_string :: proc(token: ^Token) -> string
+{
+	assert(len(token.source) >= 2, "String does not have quotation marks")
+	return token.source[1:len(token.source) - 1]
+}
+
 token_import_match_arguments :: proc(paren: ^Token, program: ^Program) -> ^Token
 {
 	assert(paren.type == .Paren, "Import arguments were not in parentheses")
@@ -699,54 +759,76 @@ token_import_match_arguments :: proc(paren: ^Token, program: ^Program) -> ^Token
 	return token_value_make(paren, result, library_name_string, comma, symbol_name_string)
 }
 
-token_rewrite_functions :: proc(state: ^Token_Matcher_State, program: ^Program) -> bool
+token_rewrite_dll_imports :: proc(state: ^Token_Matcher_State, program: ^Program) -> bool
 {
-	arrow := token_peek_match(state, 1, &Token{type = .Operator, source = "->"})
-	if arrow == nil do return false
+	peek_index := 0
+	name := Token_Match(state, &peek_index, &Token{type = .Id, source = "import"}); if name == nil do return false
+	args := Token_Match(state, &peek_index, &Token{type = .Paren});                 if args == nil do return false
+	result_token := token_import_match_arguments(args, program)
 	
-	args         := token_peek_match(state, 0, &Token{type = .Paren})
-	return_types := token_peek_match(state, 2, &Token{type = .Paren})
-	body         := token_peek(state, 3)
-	// TODO show proper error to the user
-	assert(args != nil, "Function definition is missing args")
-	assert(return_types != nil, "Function definition is missing return type")
-	assert(body != nil, "Function definition is missing body")
-	
-	result_token := new_clone(Token \
-	{
-		type   = .Lazy_Function_Definition,
-		parent = arrow.parent,
-		source = combine_token_sources(args, arrow, return_types, body),
-		data   = {lazy_function_definition =
-		{
-			args         = args,
-			return_types = return_types,
-			body         = body,
-			program      = program,
-		}},
-	})
-	
-	i := state.start_index
-	state.tokens[i] = result_token
-	remove_range(state.tokens, i + 1, i + 4)
+	token_replace_tokens_in_state(state, 2, result_token)
 	return true
 }
 
-// FIXME definition should rewrite with a token so that we can do proper
-// checking inside statements and maybe pass it around.
-token_rewrite_constant_definitions :: proc(state: ^Token_Matcher_State, program: ^Program) -> bool
+token_rewrite_function_calls :: proc(state: ^Token_Matcher_State, scope: ^Scope, builder: ^Function_Builder) -> bool
 {
-	define := token_peek_match(state, 1, &Token{type = .Operator, source = "::"})
-	if define == nil do return false
+	peek_index := 0
+	target_token := Token_Match(state, &peek_index, &Token{});              if target_token == nil do return false
+	args_token   := Token_Match(state, &peek_index, &Token{type = .Paren}); if args_token   == nil do return false
+	if target_token.type != .Id && target_token.type != .Paren do return false
 	
-	name := token_peek_match(state, 0, &Token{type = .Id})
-	value := token_peek(state, 2)
-	assert(value != nil, "Missing definition of global value")
-	scope_define_lazy(program.global_scope, name.source, value)
+	target := token_force_value(target_token, scope, builder)
+	args   := token_match_call_arguments(args_token, scope, builder)
 	
-	i := state.start_index
-	remove_range(state.tokens, i, i + 3)
+	return_value := call_function_value(builder, target, ..args[:])
+	
+	token_replace_tokens_in_state(state, 2, token_value_make(args_token, return_value, target_token, args_token))
 	return true
+}
+
+token_rewrite_plus :: proc(state: ^Token_Matcher_State, scope: ^Scope, builder: ^Function_Builder) -> bool
+{
+	peek_index := 0
+	lhs        := Token_Match(state, &peek_index, &Token{});     if lhs        == nil do return false
+	plus_token := Token_Match_Operator(state, &peek_index, "+"); if plus_token == nil do return false
+	rhs        := Token_Match(state, &peek_index, &Token{});     if rhs        == nil do return false
+	
+	value := plus(builder,
+	              token_force_value(lhs, scope, builder),
+	              token_force_value(rhs, scope, builder))
+	token_replace_tokens_in_state(state, 3, token_value_make(plus_token, value, lhs, plus_token, rhs))
+	return true
+}
+
+token_rewrite_callback :: #type proc(^Token_Matcher_State, ^Program) -> bool
+
+token_rewrite :: proc(state: ^Token_Matcher_State, program: ^Program, callback: token_rewrite_callback)
+{
+	retry: for
+	{
+		for i := 0; i < len(state.tokens); i += 1
+		{
+			state.start_index = i
+			if callback(state, program) do continue retry
+		}
+		break
+	}
+}
+
+token_rewrite_expression_callback :: #type proc(^Token_Matcher_State, ^Scope, ^Function_Builder) -> bool
+
+token_rewrite_expression :: proc(state: ^Token_Matcher_State, scope: ^Scope, builder: ^Function_Builder,
+                                 callback: token_rewrite_expression_callback)
+{
+	retry: for
+	{
+		for i := 0; i < len(state.tokens); i += 1
+		{
+			state.start_index = i
+			if callback(state, scope, builder) do continue retry
+		}
+		break
+	}
 }
 
 token_match_expression :: proc(state: ^Token_Matcher_State, scope: ^Scope, builder: ^Function_Builder) -> ^Value
@@ -754,51 +836,8 @@ token_match_expression :: proc(state: ^Token_Matcher_State, scope: ^Scope, build
 	if len(state.tokens) == 0 do return nil
 	
 	token_rewrite(state, builder.program, token_rewrite_functions)
-	
-	// Match Function Calls
-	for did_replace := true; did_replace;
-	{
-		did_replace = false
-		for i in 0 ..< len(state.tokens)
-		{
-			state.start_index = i
-			args_token := token_peek_match(state, 1, &Token{type = .Paren})
-			if args_token == nil do continue
-			maybe_target := token_peek(state, 0)
-			if maybe_target.type != .Id && maybe_target.type != .Paren do continue
-			
-			target := token_force_value(maybe_target, scope, builder)
-			
-			args := token_match_call_arguments(args_token, scope, builder)
-			
-			result := call_function_value(builder, target, ..args[:])
-			result_token := token_value_make(args_token, result, ..state.tokens[i:i + 2])
-			state.tokens[i] = result_token
-			ordered_remove(state.tokens, i + 1)
-			did_replace = true
-		}
-	}
-	
-	for did_replace := true; did_replace;
-	{
-		did_replace = false
-		for i in 0 ..< len(state.tokens)
-		{
-			state.start_index = i
-			plus_token := token_peek_match(state, 1, &Token{type = .Operator, source = "+"})
-			if plus_token == nil do continue
-			
-			lhs := token_force_value(token_peek(state, 0), scope, builder)
-			rhs := token_force_value(token_peek(state, 2), scope, builder)
-			
-			result := plus(builder, lhs, rhs)
-			result_token := token_value_make(plus_token, result, ..state.tokens[i:i + 3])
-			state.tokens[i] = result_token
-			remove_range(state.tokens, i + 1, i + 3)
-			did_replace = true
-		}
-	}
-	
+	token_rewrite_expression(state, scope, builder, token_rewrite_function_calls)
+	token_rewrite_expression(state, scope, builder, token_rewrite_plus)
 	token_rewrite(state, builder.program, token_rewrite_constant_definitions)
 	
 	switch len(state.tokens)
@@ -888,27 +927,6 @@ token_force_lazy_function_definition :: proc(lazy_function_definition: ^Lazy_Fun
 	return value
 }
 
-token_string_to_string :: proc(token: ^Token) -> string
-{
-	assert(len(token.source) >= 2, "String does not have quotation marks")
-	return token.source[1:len(token.source) - 1]
-}
-
-token_rewrite_callback :: #type proc(^Token_Matcher_State, ^Program) -> bool
-
-token_rewrite :: proc(state: ^Token_Matcher_State, program: ^Program, callback: token_rewrite_callback)
-{
-	retry: for
-	{
-		for i := 0; i < len(state.tokens); i += 1
-		{
-			state.start_index = i
-			if callback(state, program) do continue retry
-		}
-		break
-	}
-}
-
 token_match_module :: proc(token: ^Token, program: ^Program)
 {
 	assert(token.type == .Module, "Token was not a module")
@@ -916,27 +934,7 @@ token_match_module :: proc(token: ^Token, program: ^Program)
 	
 	state := &Token_Matcher_State{tokens = &token.children}
 	
-	// Matching symbol imports
-	for did_replace := true; did_replace;
-	{
-		did_replace = false
-		for i := 0; i < len(state.tokens); i += 1
-		{
-			state.start_index = i
-			
-			import_ := token_peek_match(state, 0, &Token{type = .Id, source = "import"})
-			if import_ == nil do continue
-			args := token_peek_match(state, 1, &Token{type = .Paren})
-			if args == nil do continue
-			
-			result_token := token_import_match_arguments(args, program)
-			
-			state.tokens[i] = result_token
-			ordered_remove(state.tokens, i + 1)
-			did_replace = true
-		}
-	}
-	
+	token_rewrite(state, program, token_rewrite_dll_imports)
 	token_rewrite(state, program, token_rewrite_functions)
 	token_rewrite(state, program, token_rewrite_constant_definitions)
 	

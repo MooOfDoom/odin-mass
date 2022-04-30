@@ -202,8 +202,6 @@ fn_encode :: proc(buffer: ^Buffer, builder: ^Function_Builder, loc := #caller_lo
 	encode_instruction(buffer, builder, {ret, {}, nil, loc})
 	encode_instruction(buffer, builder, {int3, {}, nil, loc})
 	
-	if DEBUG_PRINT do print_buffer(buffer.memory[code_start:buffer.occupied])
-	
 	delete(builder.instructions)
 }
 

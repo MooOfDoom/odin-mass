@@ -204,6 +204,8 @@ encode_text_section :: proc(program: ^Program, header: ^IMAGE_SECTION_HEADER) ->
 	header.Misc.VirtualSize = u32(buffer.occupied)
 	header.SizeOfRawData = align(u32(buffer.occupied), PE32_FILE_ALIGNMENT)
 	
+	if DEBUG_PRINT do print_buffer(buffer.memory[:buffer.occupied])
+	
 	return result
 }
 

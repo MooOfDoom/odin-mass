@@ -3,8 +3,6 @@ package main
 import "core:fmt"
 import "core:mem"
 
-DEBUG_PRINT :: true
-
 fn_reflect :: proc(builder: ^Function_Builder, descriptor: ^Descriptor) -> ^Value
 {
 	result := reserve_stack(builder, &descriptor_struct_reflection)
@@ -574,13 +572,4 @@ Point :: struct
 test :: proc "c" () -> Point
 {
 	return Point{42, 84}
-}
-
-main :: proc()
-{
-	mass_spec()
-	function_spec()
-	source_spec()
-	
-	print_test_results()
 }

@@ -30,30 +30,6 @@ make_add_two :: proc(type: ^Descriptor) -> ^Value
 	return addtwo
 }
 
-type_s32_descriptor: Descriptor =
-{
-	type = .Type,
-	data = {type_descriptor = &descriptor_i32},
-}
-
-type_s64_descriptor: Descriptor =
-{
-	type = .Type,
-	data = {type_descriptor = &descriptor_i64},
-}
-
-type_s32_value: Value =
-{
-	descriptor = &type_s32_descriptor,
-	operand = {type = .None},
-}
-
-type_s64_value: Value =
-{
-	descriptor = &type_s64_descriptor,
-	operand = {type = .None},
-}
-
 function_spec :: proc()
 {
 	spec("function")
