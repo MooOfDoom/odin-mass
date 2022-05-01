@@ -26,4 +26,7 @@ echo Exit Code (Parsed): %errorlevel%
 build\test_cli
 echo Exit Code (CLI):    %errorlevel%
 build\hello_world
+echo:
+build\parsed_hello_world
+echo:
 popd

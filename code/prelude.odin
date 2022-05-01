@@ -15,6 +15,7 @@ fn_opaque                         :: distinct rawptr
 fn_void_to_void                   :: #type proc "c" ()
 fn_void_to_i32                    :: #type proc "c" () -> i32
 fn_void_to_i64                    :: #type proc "c" () -> i64
+fn_void_to_cstring                :: #type proc "c" () -> cstring
 fn_pi32_to_void                   :: #type proc "c" (^i32)
 fn_type_i32_to_i8                 :: #type proc "c" (i32) -> i8
 fn_i32_to_i32                     :: #type proc "c" (i32) -> i32

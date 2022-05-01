@@ -241,11 +241,29 @@ checker :: (x : s32) -> (s64)
 		check(size == 4)
 	})
 	
-	it("should parse write out an executable that exits with status code 42", proc()
+	it("should parse and return c compatible strings", proc()
 	{
 		program := &test_program
 		
-		// TODO Allow implicit conversion of last statement in a function body to void
+		source := `checker :: () -> ([s8]) { "test" }`
+		
+		result := tokenize("_test_.mass", source)
+		check(result.type == .Success)
+		
+		token_match_module(result.root, program)
+		
+		checker := scope_lookup_force(program.global_scope, "checker")
+
+		program_end(program)
+		
+		string_ := value_as_function(checker, fn_void_to_cstring)()
+		check(string(string_) == "test")
+	})
+	
+	it("should parse and write out an executable that exits with status code 42", proc()
+	{
+		program := &test_program
+		
 		source := `
 main :: () -> () { ExitProcess(42) }
 ExitProcess :: (status: s32) -> (s64) import("kernel32.dll", "ExitProcess")`
@@ -255,13 +273,66 @@ ExitProcess :: (status: s32) -> (s64) import("kernel32.dll", "ExitProcess")`
 		
 		token_match_module(result.root, &test_program)
 		
-		// FIXME set as entry point
 		entry := scope_lookup_force(test_program.global_scope, "main")
 		assert(entry != nil, "main not found in global scope")
 		
 		program.entry_point = entry
 		
 		write_executable("build\\test_parsed.exe", program)
+	})
+	
+	it("should parse and write an executable that prints Hello, world!", proc()
+	{
+		program := &test_program
+		
+		source := `
+ExitProcess  :: (status: s32) -> (s64) import("kernel32.dll", "ExitProcess")
+GetStdHandle :: (handle_no: s32) -> (s64) import("kernel32.dll", "GetStdHandle")
+WriteFile    :: (file_handle: s64, buffer : [s8], size : s32, bytes_written : s64, overlapped : s64) -> (s64)
+	import("kernel32.dll", "WriteFile")
+main :: () -> () {
+	WriteFile(GetStdHandle(-11), "Hello, World!", 13, 0, 0);
+	ExitProcess(0)
+}`
+		
+		result := tokenize("_test_.mass", source)
+		check(result.type == .Success)
+		
+		token_match_module(result.root, &test_program)
+		
+		entry := scope_lookup_force(test_program.global_scope, "main")
+		assert(entry != nil, "main not found in global scope")
+		
+		program.entry_point = entry
+		
+		write_executable("build\\parsed_hello_world.exe", program)
+		
+		// GetStdHandle_value := odin_function_import(program, "kernel32.dll", `GetStdHandle :: proc "std" (i32) -> i64`)
+		// STD_OUTPUT_HANDLE_value := value_from_i32(-11)
+		// ExitProcess_value := odin_function_import(program, "kernel32.dll", `ExitProcess :: proc "std" (i32)`)
+		// WriteFile_value := odin_function_import(program, "kernel32.dll",
+		//                                         `WriteFile :: proc "std" (i64, rawptr, i32, ^i32, i64) -> i8`)
+		
+		// main := Function()
+		// {
+		// 	handle            := Call(GetStdHandle_value, STD_OUTPUT_HANDLE_value)
+		// 	bytes_written     := Stack_i32(value_from_i32(0))
+		// 	bytes_written_ptr := PointerTo(bytes_written)
+		// 	message_bytes     := value_global_c_string(program, "Hello, world!")
+		// 	message_ptr       := PointerTo(message_bytes)
+		// 	Call(WriteFile_value,
+		// 	     handle,            // hFile
+		// 	     message_ptr,       // lpBuffer
+		// 	     value_from_i32(message_bytes.descriptor.array.length - 1), // nNumberOfBytesToWrite
+		// 	     bytes_written_ptr, // lpNumberOfBytesWritten
+		// 	     value_from_i64(0)) // lpOverlapped
+		// 	Call(ExitProcess_value, value_from_i32(0))
+		// }
+		// End_Function()
+		
+		// program.entry_point = main
+		
+		// write_executable("build\\hello_world.exe", program)
 	})
 	
 	it("should write out an executable that exits with status code 42", proc()

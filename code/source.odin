@@ -107,7 +107,7 @@ scope_lookup_force :: proc(scope: ^Scope, name: string, builder: ^Function_Build
 		if entry != nil do break
 		scope = scope.parent
 	}
-	assert(entry != nil, "Name not found in scope", loc)
+	assert(entry != nil, fmt.tprintf("Name %q not found in scope", name), loc)
 	result: ^Value
 	switch entry.type
 	{
@@ -564,8 +564,8 @@ program_lookup_type :: proc(program: ^Program, type_name: string) -> ^Descriptor
 
 Token_Match_Arg :: struct
 {
-	arg_name:  string,
-	type_name: string,
+	arg_name:        string,
+	type_descriptor: ^Descriptor,
 }
 
 @(private="file")
@@ -596,20 +596,54 @@ Token_Match_End :: proc(state: ^Token_Matcher_State, peek_index: int)
 	assert(peek_index == len(state.tokens), "Did not match the right number of tokens")
 }
 
+token_force_type :: proc(program: ^Program, token: ^Token) -> ^Descriptor
+{
+	descriptor: ^Descriptor
+	#partial switch token.type
+	{
+		case .Id:
+		{
+			descriptor = program_lookup_type(program, token.source)
+		}
+		case .Square:
+		{
+			assert(len(token.children) == 1, "Pointer type did not have exactly one child")
+			child := token.children[0]
+			descriptor = new_clone(Descriptor \
+			{
+				type = .Pointer,
+				data = {pointer_to = program_lookup_type(program, child.source)},
+			})
+		}
+		case:
+		{
+			assert(false, "Not implemented")
+		}
+	}
+	return descriptor
+}
+
 token_match_argument :: proc(state: ^Token_Matcher_State, program: ^Program) -> ^Token_Match_Arg
 {
 	peek_index := 0
 	
 	arg_id   := Token_Match(state, &peek_index, &Token{type = .Id}); if arg_id   == nil do return nil
 	colon    := Token_Match_Operator(state, &peek_index, ":");       if colon    == nil do return nil
-	arg_type := Token_Match(state, &peek_index, &Token{type = .Id}); if arg_type == nil do return nil
+	arg_type := Token_Match(state, &peek_index, &Token{});           if arg_type == nil do return nil
 	Token_Match_End(state, peek_index)
 	
 	return new_clone(Token_Match_Arg \
 	{
-		arg_name  = arg_id.source,
-		type_name = arg_type.source,
+		arg_name        = arg_id.source,
+		type_descriptor = token_force_type(program, arg_type),
 	})
+}
+
+token_string_to_string :: proc(token: ^Token) -> string
+{
+	assert(token.type == .String, "Token was not a string")
+	assert(len(token.source) >= 2, "String does not have quotation marks")
+	return token.source[1:len(token.source) - 1]
 }
 
 token_force_value :: proc(token: ^Token, scope: ^Scope, builder: ^Function_Builder, loc := #caller_location) -> ^Value
@@ -621,6 +655,11 @@ token_force_value :: proc(token: ^Token, scope: ^Scope, builder: ^Function_Build
 		assert(ok, "Could not parse expression as int", loc)
 		// FIXME We should be able to size immediates automatically
 		result_value = value_from_signed_immediate(value)
+	}
+	else if token.type == .String
+	{
+		string_ := token_string_to_string(token)
+		result_value = value_pointer_to(builder, value_global_c_string(builder.program, string_))
 	}
 	else if token.type == .Id
 	{
@@ -747,6 +786,34 @@ token_rewrite_definition_and_assignment_statements :: proc(state: ^Token_Matcher
 	return true
 }
 
+token_rewrite_negative_leteral :: proc(state: ^Token_Matcher_State, scope: ^Scope, builder: ^Function_Builder) -> bool
+{
+	peek_index := 0
+	// FIXME distinguish unary and binary minus
+	minus   := Token_Match_Operator(state, &peek_index, "-");            if minus   == nil do return false
+	integer := Token_Match(state, &peek_index, &Token{type = .Integer}); if integer == nil do return false
+	result := token_force_value(integer, scope, builder)
+	if result.operand.type == .Immediate_8
+	{
+		result.operand.imm8 = -result.operand.imm8
+	}
+	else if result.operand.type == .Immediate_32
+	{
+		result.operand.imm32 = -result.operand.imm32
+	}
+	else if result.operand.type == .Immediate_64
+	{
+		result.operand.imm64 = -result.operand.imm64
+	}
+	else
+	{
+		assert(false, "Internal error, expected an immediate")
+	}
+	
+	token_replace_tokens_in_state(state, 2, token_value_make(integer, result, minus, integer))
+	return true
+}
+
 token_rewrite_definitions :: proc(state: ^Token_Matcher_State, scope: ^Scope, builder: ^Function_Builder) -> bool
 {
 	peek_index := 0
@@ -779,12 +846,6 @@ token_rewrite_assignments :: proc(state: ^Token_Matcher_State, scope: ^Scope, bu
 	// checking inside statements and maybe pass it around.
 	token_replace_tokens_in_state(state, 3)
 	return true
-}
-
-token_string_to_string :: proc(token: ^Token) -> string
-{
-	assert(len(token.source) >= 2, "String does not have quotation marks")
-	return token.source[1:len(token.source) - 1]
 }
 
 token_import_match_arguments :: proc(paren: ^Token, program: ^Program) -> ^Token
@@ -888,6 +949,7 @@ token_match_expression :: proc(state: ^Token_Matcher_State, scope: ^Scope, build
 	if len(state.tokens) == 0 do return nil
 	
 	token_rewrite(state, builder.program, token_rewrite_functions)
+	token_rewrite_expression(state, scope, builder, token_rewrite_negative_leteral)
 	token_rewrite_expression(state, scope, builder, token_rewrite_function_calls)
 	token_rewrite_expression(state, scope, builder, token_rewrite_plus)
 	token_rewrite_expression(state, scope, builder, token_rewrite_definition_and_assignment_statements)
@@ -927,7 +989,7 @@ token_force_lazy_function_definition :: proc(lazy_function_definition: ^Lazy_Fun
 			{
 				arg := token_match_argument(&state, program)
 				assert(arg != nil, "Ill-formed function argument declaration")
-				arg_value := Arg(program_lookup_type(program, arg.type_name))
+				arg_value := Arg(arg.type_descriptor)
 				scope_define_value(function_scope, arg.arg_name, arg_value)
 			}
 		}
@@ -940,9 +1002,7 @@ token_force_lazy_function_definition :: proc(lazy_function_definition: ^Lazy_Fun
 			case 1:
 			{
 				return_type_token := return_types.children[0]
-				assert(return_type_token.type == .Id, "Return type was not identifier")
-				
-				fn_return_descriptor(builder, program_lookup_type(program, return_type_token.source), .Explicit)
+				fn_return_descriptor(builder, token_force_type(program, return_type_token), .Explicit)
 			}
 			case 2:
 			{
