@@ -29,4 +29,6 @@ build\hello_world
 echo:
 build\parsed_hello_world
 echo:
+build\mass --run code\fixtures\hello_world.mass
+echo:
 popd

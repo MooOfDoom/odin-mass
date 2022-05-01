@@ -223,7 +223,8 @@ program_end :: proc(program: ^Program, loc := #caller_location) -> Jit_Program
 		for sym in &lib.symbols
 		{
 			sym_address := win32.get_proc_address(dll_handle, strings.clone_to_cstring(sym.name))
-			check(sym_address != nil)
+			assert(sym_address != nil, "Symbol not found in DLL")
+			program.data_buffer.occupied = align(program.data_buffer.occupied, size_of(rawptr))
 			offset_in_data := program.data_buffer.occupied
 			buffer_append(&program.data_buffer, sym_address)
 			assert(fits_into_u32(offset_in_data), "RIP offset of import too far")

@@ -218,27 +218,20 @@ mass_spec :: proc()
 	temp_buffer := make_buffer(1024 * 1024, PAGE_READWRITE)
 	context.allocator = buffer_allocator(&temp_buffer)
 	
-	fn_context: Function_Context
-	context.user_ptr = &fn_context
+	context_stack: [dynamic]Function_Context
+	context.user_ptr = &context_stack
 	
 	before_each(proc()
 	{
-		test_program =
-		{
-			data_buffer      = make_buffer(128 * 1024, PAGE_READWRITE),
-			import_libraries = make([dynamic]Import_Library, 0, 16),
-			functions        = make([dynamic]Function_Builder, 0, 16),
-		}
+		program_init(&test_program)
 		
-		// NOTE(Lothar): Need to clear the fn_context so that its dynamic arrays don't continue to point
-		// into the freed temp buffer
-		fn_context := cast(^Function_Context)context.user_ptr
-		fn_context^ = {}
+		context_stack := cast(^[dynamic]Function_Context)context.user_ptr
+		context_stack^ = {}
 	})
 	
 	after_each(proc()
 	{
-		free_buffer(&test_program.data_buffer)
+		program_deinit(&test_program)
 		free_all()
 	})
 	

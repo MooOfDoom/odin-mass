@@ -569,7 +569,8 @@ rip_value_pointer :: proc(program: ^Program, value: ^Value) -> [^]byte
 value_global :: proc(program: ^Program, descriptor: ^Descriptor) -> ^Value
 {
 	byte_size := descriptor_byte_size(descriptor)
-	
+	alignment := descriptor_alignment(descriptor)
+	program.data_buffer.occupied = align(program.data_buffer.occupied, int(alignment))
 	address := &program.data_buffer.memory[program.data_buffer.occupied]
 	program.data_buffer.occupied += int(byte_size)
 	
@@ -685,6 +686,15 @@ same_type :: proc(a: ^Descriptor, b: ^Descriptor) -> bool
 	return false
 }
 
+descriptor_alignment :: proc(descriptor: ^Descriptor) -> i32
+{
+	if descriptor.type == .Fixed_Size_Array
+	{
+		return descriptor_alignment(descriptor.array.item)
+	}
+	return descriptor_byte_size(descriptor)
+}
+
 same_value_type :: proc(a: ^Value, b: ^Value) -> bool
 {
 	return same_type(a.descriptor, b.descriptor)
@@ -711,12 +721,13 @@ struct_byte_size :: proc(struct_: ^Descriptor_Struct) -> i32
 	raw_size:  i32
 	for field, i in struct_.fields
 	{
-		field_size := descriptor_byte_size(field.descriptor)
-		alignment = max(alignment, field_size)
+		field_alignment := descriptor_alignment(field.descriptor)
+		alignment = max(alignment, field_alignment)
 		is_last_field := (i == count - 1)
+		field_size_with_alignment := max(field_alignment, descriptor_byte_size(field.descriptor))
 		if is_last_field
 		{
-			raw_size = field.offset + field_size
+			raw_size = field.offset + field_size_with_alignment
 		}
 	}
 	return align(raw_size, alignment)
@@ -1006,6 +1017,28 @@ odin_function_value :: proc(forward_declaration: string, fn: fn_opaque) -> ^Valu
 	})
 }
 
+program_init :: proc(program: ^Program) -> ^Program
+{
+	program^ =
+	{
+		data_buffer      = make_buffer(128 * 1024, PAGE_READWRITE),
+		import_libraries = make([dynamic]Import_Library, 0, 16),
+		functions        = make([dynamic]Function_Builder, 0, 16),
+		global_scope     = scope_make(),
+	}
+	
+	scope_define_value(program.global_scope, "s8", &type_s8_value)
+	scope_define_value(program.global_scope, "s32", &type_s32_value)
+	scope_define_value(program.global_scope, "s64", &type_s64_value)
+	return program
+}
+
+program_deinit :: proc(program: ^Program)
+{
+	free_buffer(&program.data_buffer)
+	program^ = {}
+}
+
 ascii_strings_match_case_insensitive :: proc(a: string, b: string) -> bool
 {
 	if len(a) != len(b) do return false
@@ -1027,16 +1060,40 @@ ascii_strings_match_case_insensitive :: proc(a: string, b: string) -> bool
 	return true
 }
 
-import_symbol :: proc(program: ^Program, library_name: string, symbol_name: string) -> Operand
+program_find_import_library :: proc(program: ^Program, library_name: string) -> ^Import_Library
 {
-	library: ^Import_Library
 	for lib in &program.import_libraries
 	{
 		if ascii_strings_match_case_insensitive(lib.name, library_name)
 		{
-			library = &lib
+			return &lib
 		}
 	}
+	return nil
+}
+
+import_library_find_symbol :: proc(library: ^Import_Library, symbol_name: string) -> ^Import_Symbol
+{
+	for sym in &library.symbols
+	{
+		if sym.name == symbol_name
+		{
+			return &sym
+		}
+	}
+	return nil
+}
+
+program_find_import :: proc(program: ^Program, library_name: string, symbol_name: string) -> ^Import_Symbol
+{
+	lib := program_find_import_library(program, library_name)
+	if lib == nil do return nil
+	return import_library_find_symbol(lib, symbol_name)
+}
+
+import_symbol :: proc(program: ^Program, library_name: string, symbol_name: string) -> Operand
+{
+	library := program_find_import_library(program, library_name)
 	
 	if library == nil
 	{
@@ -1051,14 +1108,7 @@ import_symbol :: proc(program: ^Program, library_name: string, symbol_name: stri
 		library = &program.import_libraries[len(program.import_libraries) - 1]
 	}
 	
-	symbol: ^Import_Symbol
-	for sym in &library.symbols
-	{
-		if sym.name == symbol_name
-		{
-			symbol = &sym
-		}
-	}
+	symbol := import_library_find_symbol(library, symbol_name)
 	
 	if symbol == nil
 	{
@@ -1093,23 +1143,6 @@ odin_function_import :: proc(program: ^Program, library_name: string, forward_de
 		descriptor = odin_function_descriptor(forward_declaration),
 		operand = import_symbol(program, library_name, symbol_name),
 	})
-}
-
-program_find_import :: proc(program: ^Program, library_name: string, symbol_name: string) -> ^Import_Symbol
-{
-	for lib in &program.import_libraries
-	{
-		if !ascii_strings_match_case_insensitive(lib.name, library_name) do continue
-		
-		for sym in &lib.symbols
-		{
-			if sym.name == symbol_name
-			{
-				return &sym
-			}
-		}
-	}
-	return nil
 }
 
 estimate_max_code_size_in_bytes :: proc(program: ^Program) -> int

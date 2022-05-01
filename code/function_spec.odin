@@ -37,32 +37,20 @@ function_spec :: proc()
 	temp_buffer := make_buffer(1024 * 1024, PAGE_READWRITE)
 	context.allocator = buffer_allocator(&temp_buffer)
 	
-	fn_context: Function_Context
-	context.user_ptr = &fn_context
+	context_stack: [dynamic]Function_Context
+	context.user_ptr = &context_stack
 	
 	before_each(proc()
 	{
-		test_program =
-		{
-			data_buffer      = make_buffer(128 * 1024, PAGE_READWRITE),
-			import_libraries = make([dynamic]Import_Library, 0, 16),
-			functions        = make([dynamic]Function_Builder, 0, 16),
-			global_scope     = scope_make(),
-		}
+		program_init(&test_program)
 		
-		scope_define_value(test_program.global_scope, "s8", &type_s8_value)
-		scope_define_value(test_program.global_scope, "s32", &type_s32_value)
-		scope_define_value(test_program.global_scope, "s64", &type_s64_value)
-		
-		// NOTE(Lothar): Need to clear the fn_context so that its dynamic arrays don't continue to point
-		// into the freed temp buffer
-		fn_context := cast(^Function_Context)context.user_ptr
-		fn_context^ = {}
+		context_stack := cast(^[dynamic]Function_Context)context.user_ptr
+		context_stack^ = {}
 	})
 	
 	after_each(proc()
 	{
-		free_buffer(&test_program.data_buffer)
+		program_deinit(&test_program)
 		free_all()
 	})
 	
@@ -294,7 +282,7 @@ main :: () -> () {
 	WriteFile(GetStdHandle(-11), "Hello, World!", 13, 0, 0);
 	ExitProcess(0)
 }`
-		
+		fmt.printf("%q\n", source)
 		result := tokenize("_test_.mass", source)
 		check(result.type == .Success)
 		
@@ -306,33 +294,6 @@ main :: () -> () {
 		program.entry_point = entry
 		
 		write_executable("build\\parsed_hello_world.exe", program)
-		
-		// GetStdHandle_value := odin_function_import(program, "kernel32.dll", `GetStdHandle :: proc "std" (i32) -> i64`)
-		// STD_OUTPUT_HANDLE_value := value_from_i32(-11)
-		// ExitProcess_value := odin_function_import(program, "kernel32.dll", `ExitProcess :: proc "std" (i32)`)
-		// WriteFile_value := odin_function_import(program, "kernel32.dll",
-		//                                         `WriteFile :: proc "std" (i64, rawptr, i32, ^i32, i64) -> i8`)
-		
-		// main := Function()
-		// {
-		// 	handle            := Call(GetStdHandle_value, STD_OUTPUT_HANDLE_value)
-		// 	bytes_written     := Stack_i32(value_from_i32(0))
-		// 	bytes_written_ptr := PointerTo(bytes_written)
-		// 	message_bytes     := value_global_c_string(program, "Hello, world!")
-		// 	message_ptr       := PointerTo(message_bytes)
-		// 	Call(WriteFile_value,
-		// 	     handle,            // hFile
-		// 	     message_ptr,       // lpBuffer
-		// 	     value_from_i32(message_bytes.descriptor.array.length - 1), // nNumberOfBytesToWrite
-		// 	     bytes_written_ptr, // lpNumberOfBytesWritten
-		// 	     value_from_i64(0)) // lpOverlapped
-		// 	Call(ExitProcess_value, value_from_i32(0))
-		// }
-		// End_Function()
-		
-		// program.entry_point = main
-		
-		// write_executable("build\\hello_world.exe", program)
 	})
 	
 	it("should write out an executable that exits with status code 42", proc()

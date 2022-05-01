@@ -297,7 +297,16 @@ tokenize :: proc(filename: string, source: string) -> Tokenizer_Result
 	
 	end_token :: proc(token: ^^Token, parent: ^Token, source: string, i: int, state: ^Tokenizer_State)
 	{
-		update_token_source(token^, source, i)
+		// NOTE(Lothar): Due to the way we skip \r in case of \r\n, we may inadvertantly include \r in the source.
+		// This avoids this explicitly
+		if source[i - 1] == '\r'
+		{
+			update_token_source(token^, source, i - 1)
+		}
+		else
+		{
+			update_token_source(token^, source, i)
+		}
 		append(&parent.children, token^)
 		token^ = nil
 		state^ = .Default
@@ -786,7 +795,7 @@ token_rewrite_definition_and_assignment_statements :: proc(state: ^Token_Matcher
 	return true
 }
 
-token_rewrite_negative_leteral :: proc(state: ^Token_Matcher_State, scope: ^Scope, builder: ^Function_Builder) -> bool
+token_rewrite_negative_literal :: proc(state: ^Token_Matcher_State, scope: ^Scope, builder: ^Function_Builder) -> bool
 {
 	peek_index := 0
 	// FIXME distinguish unary and binary minus
@@ -949,7 +958,7 @@ token_match_expression :: proc(state: ^Token_Matcher_State, scope: ^Scope, build
 	if len(state.tokens) == 0 do return nil
 	
 	token_rewrite(state, builder.program, token_rewrite_functions)
-	token_rewrite_expression(state, scope, builder, token_rewrite_negative_leteral)
+	token_rewrite_expression(state, scope, builder, token_rewrite_negative_literal)
 	token_rewrite_expression(state, scope, builder, token_rewrite_function_calls)
 	token_rewrite_expression(state, scope, builder, token_rewrite_plus)
 	token_rewrite_expression(state, scope, builder, token_rewrite_definition_and_assignment_statements)
@@ -963,7 +972,7 @@ token_match_expression :: proc(state: ^Token_Matcher_State, scope: ^Scope, build
 		case 1: return token_force_value(state.tokens[0], scope, builder)
 		case:
 		{
-			assert(false, "Could not reduce an expression")
+			assert(false, fmt.tprintf("Could not reduce an expression from %q", combine_token_sources(..state.tokens[:])))
 			return nil
 		}
 	}
