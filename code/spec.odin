@@ -192,7 +192,7 @@ MaybeCastToTag :: proc(name: string, value: ^Value) -> ^Value
 	return maybe_cast_to_tag(builder, name, value)
 }
 
-create_is_character_in_set_checker_fn :: proc(characters: string) -> fn_type_i32_to_i8
+create_is_character_in_set_checker_fn :: proc(characters: string) -> fn_i32_to_i8
 {
 	assert(characters != "")
 	checker := Function()
@@ -200,7 +200,7 @@ create_is_character_in_set_checker_fn :: proc(characters: string) -> fn_type_i32
 		character := Arg_i32()
 		for ch in characters
 		{
-			if(If(Eq(character, value_from_i32(i32(ch))))) {
+			if If(Eq(character, value_from_i32(i32(ch)))) {
 				Return(value_from_i8(1))
 			End_If()}
 		}
@@ -208,7 +208,7 @@ create_is_character_in_set_checker_fn :: proc(characters: string) -> fn_type_i32
 	}
 	End_Function()
 	program_end(&test_program)
-	return value_as_function(checker, fn_type_i32_to_i8)
+	return value_as_function(checker, fn_i32_to_i8)
 }
 
 mass_spec :: proc()
@@ -395,7 +395,7 @@ mass_spec :: proc()
 			option_value := Arg(descriptor_pointer_to(&option_i64_descriptor))
 			default_value := Arg_i64()
 			some := MaybeCastToTag("Some", option_value)
-			if(If(some)) {
+			if If(some) {
 				value := StructField(some, "value")
 				Return(value)
 			End_If()}
@@ -520,7 +520,7 @@ mass_spec :: proc()
 				// TODO check that the descriptor is indeed an array
 				length := i32(array_pointer_descriptor.pointer_to.array.length)
 				
-				if(If(Greater(index, value_from_i32(length - 1)))) {
+				if If(Greater(index, value_from_i32(length - 1))) {
 					Break()
 				End_If()}
 				

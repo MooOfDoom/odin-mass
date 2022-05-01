@@ -1,6 +1,6 @@
 package main
 
-DEBUG_PRINT :: true
+DEBUG_PRINT :: false
 
 import "core:fmt"
 import "core:os"

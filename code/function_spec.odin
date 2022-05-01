@@ -204,6 +204,56 @@ checker_s32 :: (x : s32) -> (s64) { size_of(x) }`
 		}
 	})
 	
+	it("should be able to have an explicit return", proc()
+	{
+		program := &test_program
+		
+		source := `
+checker :: (x : s32) -> (s32)
+{
+	return x
+}`
+		
+		result := tokenize("_test_.mass", source)
+		check(result.type == .Success)
+		
+		token_match_module(result.root, program)
+		
+		checker := scope_lookup_force(program.global_scope, "checker")
+
+		program_end(program)
+		
+		actual := value_as_function(checker, fn_i32_to_i32)(42)
+		check(actual == 42)
+	})
+	
+	it("should be able to parse and run if expression", proc()
+	{
+		program := &test_program
+		
+		source := `
+is_positive :: (x : s32) -> (s8)
+{
+	if x < 0 { return 0 };
+	1
+}`
+		
+		result := tokenize("_test_.mass", source)
+		check(result.type == .Success)
+		
+		token_match_module(result.root, program)
+		
+		is_positive := scope_lookup_force(program.global_scope, "is_positive")
+
+		program_end(program)
+		
+		is_positive_fn := value_as_function(is_positive, fn_i32_to_i8)
+		
+		check(is_positive_fn(42) == 1)
+		check(is_positive_fn(0) == 1)
+		check(is_positive_fn(-42) == 0)
+	})
+	
 	it("should be able to parse and run functions with local overloads", proc()
 	{
 		program := &test_program
@@ -590,11 +640,11 @@ main :: () -> () {
 	{
 		checker_value := Function()
 		{
-			if(If(Eq(value_from_i32(1), value_from_i32(0)))) {
+			if If(Eq(value_from_i32(1), value_from_i32(0))) {
 				Return(value_from_i32(0))
 			End_If()}
 			
-			if(If(Eq(value_from_i32(1), value_from_i32(1)))) {
+			if If(Eq(value_from_i32(1), value_from_i32(1))) {
 				Return(value_from_i32(1))
 			End_If()}
 			
@@ -620,7 +670,7 @@ main :: () -> () {
 		{
 			x := Arg_i32()
 			
-			if(If(Eq(x, value_from_i32(0)))) {
+			if If(Eq(x, value_from_i32(0))) {
 				Return(value_from_i32(0))
 			End_If()}
 			
@@ -853,11 +903,11 @@ main :: () -> () {
 		fib := Function()
 		{
 			n := Arg_i64()
-			if(If(Eq(n, value_from_i64(0)))) {
+			if If(Eq(n, value_from_i64(0))) {
 				Return(value_from_i64(0))
 			End_If()}
 			
-			if(If(Eq(n, value_from_i64(1)))) {
+			if If(Eq(n, value_from_i64(1))) {
 				Return(value_from_i64(1))
 			End_If()}
 			

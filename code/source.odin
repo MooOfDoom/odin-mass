@@ -795,6 +795,53 @@ token_rewrite_definition_and_assignment_statements :: proc(state: ^Token_Matcher
 	return true
 }
 
+token_parse_block :: proc(block: ^Token, scope: ^Scope, builder: ^Function_Builder) -> ^Value
+{
+	// TODO push an extra scope
+	assert(block.type == .Curly, "Block was not inside curly braces")
+	block_result: ^Value
+	if len(block.children) != 0
+	{
+		block_statements := token_split(&block.children, &Token{type = .Operator, source = ";"})
+		
+		for state in &block_statements
+		{
+			block_result = token_match_expression(&state, scope, builder)
+		}
+	}
+	
+	return block_result
+}
+
+token_rewrite_statement_if :: proc(state: ^Token_Matcher_State, scope: ^Scope, builder: ^Function_Builder) -> bool
+{
+	peek_index := 0
+	keyword   := Token_Match(state, &peek_index, &Token{type = .Id, source = "if"}); if keyword   == nil do return false
+	condition := Token_Match(state, &peek_index, &Token{});                          if condition == nil do return false
+	body      := Token_Match(state, &peek_index, &Token{type = .Curly});             if body      == nil do return false
+	Token_Match_End(state, peek_index)
+	
+	if If(token_force_value(condition, scope, builder)) {
+		token_parse_block(body, scope, builder)
+	End_If()}
+	
+	token_replace_tokens_in_state(state, 3)
+	return true
+}
+
+token_rewrite_explicit_return :: proc(state: ^Token_Matcher_State, scope: ^Scope, builder: ^Function_Builder) -> bool
+{
+	peek_index := 0
+	keyword   := Token_Match(state, &peek_index, &Token{type = .Id, source = "return"}); if keyword   == nil do return false
+	to_return := Token_Match(state, &peek_index, &Token{});                              if to_return == nil do return false
+	Token_Match_End(state, peek_index)
+	result := token_force_value(to_return, scope, builder)
+	Return(result)
+	
+	token_replace_tokens_in_state(state, 2)
+	return true
+}
+
 token_rewrite_negative_literal :: proc(state: ^Token_Matcher_State, scope: ^Scope, builder: ^Function_Builder) -> bool
 {
 	peek_index := 0
@@ -922,6 +969,20 @@ token_rewrite_plus :: proc(state: ^Token_Matcher_State, scope: ^Scope, builder: 
 	return true
 }
 
+token_rewrite_less_than :: proc(state: ^Token_Matcher_State, scope: ^Scope, builder: ^Function_Builder) -> bool
+{
+	peek_index := 0
+	lhs        := Token_Match(state, &peek_index, &Token{});     if lhs        == nil do return false
+	less_token := Token_Match_Operator(state, &peek_index, "<"); if less_token == nil do return false
+	rhs        := Token_Match(state, &peek_index, &Token{});     if rhs        == nil do return false
+	
+	value := compare(builder, .Less,
+	                 token_force_value(lhs, scope, builder),
+	                 token_force_value(rhs, scope, builder))
+	token_replace_tokens_in_state(state, 3, token_value_make(less_token, value, lhs, less_token, rhs))
+	return true
+}
+
 token_rewrite_callback :: #type proc(^Token_Matcher_State, ^Program) -> bool
 
 token_rewrite :: proc(state: ^Token_Matcher_State, program: ^Program, callback: token_rewrite_callback)
@@ -961,10 +1022,7 @@ token_match_expression :: proc(state: ^Token_Matcher_State, scope: ^Scope, build
 	token_rewrite_expression(state, scope, builder, token_rewrite_negative_literal)
 	token_rewrite_expression(state, scope, builder, token_rewrite_function_calls)
 	token_rewrite_expression(state, scope, builder, token_rewrite_plus)
-	token_rewrite_expression(state, scope, builder, token_rewrite_definition_and_assignment_statements)
-	token_rewrite_expression(state, scope, builder, token_rewrite_assignments)
-	token_rewrite_expression(state, scope, builder, token_rewrite_definitions)
-	token_rewrite(state, builder.program, token_rewrite_constant_definitions)
+	token_rewrite_expression(state, scope, builder, token_rewrite_less_than)
 	
 	switch len(state.tokens)
 	{
@@ -972,7 +1030,17 @@ token_match_expression :: proc(state: ^Token_Matcher_State, scope: ^Scope, build
 		case 1: return token_force_value(state.tokens[0], scope, builder)
 		case:
 		{
-			assert(false, fmt.tprintf("Could not reduce an expression from %q", combine_token_sources(..state.tokens[:])))
+			// Statement handling
+			token_rewrite_expression(state, scope, builder, token_rewrite_definition_and_assignment_statements)
+			token_rewrite_expression(state, scope, builder, token_rewrite_assignments)
+			token_rewrite_expression(state, scope, builder, token_rewrite_definitions)
+			token_rewrite_expression(state, scope, builder, token_rewrite_explicit_return)
+			token_rewrite_expression(state, scope, builder, token_rewrite_statement_if)
+			token_rewrite(state, builder.program, token_rewrite_constant_definitions)
+			if len(state.tokens) != 0
+			{
+				assert(false, fmt.tprintf("Could not reduce an expression from %q", combine_token_sources(..state.tokens[:])))
+			}
 			return nil
 		}
 	}
@@ -1029,17 +1097,7 @@ token_force_lazy_function_definition :: proc(lazy_function_definition: ^Lazy_Fun
 		}
 		else
 		{
-			body_result := &void_value
-			if len(body.children) != 0
-			{
-				body_statements := token_split(&body.children, &Token{type = .Operator, source = ";"})
-				
-				for state, i in &body_statements
-				{
-					body_result = token_match_expression(&state, function_scope, builder)
-				}
-			}
-			
+			body_result := token_parse_block(body, function_scope, builder)
 			if body_result != nil
 			{
 				fn_return(builder, body_result, .Implicit)

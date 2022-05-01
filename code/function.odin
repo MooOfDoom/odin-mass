@@ -534,16 +534,18 @@ maybe_constant_compare :: proc(a: ^Value, b: ^Value, operation: Compare) -> ^Val
 
 compare :: proc(builder: ^Function_Builder, operation: Compare, a: ^Value, b: ^Value, loc := #caller_location) -> ^Value
 {
-	assert(same_value_type(a, b), "Types match in compare")
 	assert(a.descriptor.type == .Integer, "Can only compare integers")
+	assert(b.descriptor.type == .Integer, "Can only compare integers")
 	
 	const_result := maybe_constant_compare(a, b, operation)
 	if const_result != nil do return const_result
 	
-	temp_b := reserve_stack(builder, b.descriptor)
+	larger_descriptor := descriptor_byte_size(a.descriptor) > descriptor_byte_size(b.descriptor) ? a.descriptor : b.descriptor
+	
+	temp_b := reserve_stack(builder, larger_descriptor)
 	move_value(builder, temp_b, b, loc)
 	
-	reg_a := value_register_for_descriptor(.A, a.descriptor)
+	reg_a := value_register_for_descriptor(.A, larger_descriptor)
 	move_value(builder, reg_a, a, loc)
 	
 	push_instruction(builder, {cmp, {reg_a.operand, temp_b.operand, {}}, nil, loc})
