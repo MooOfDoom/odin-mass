@@ -562,9 +562,9 @@ token_split :: proc(tokens: ^[dynamic]^Token, separator: ^Token) -> [dynamic]Tok
 	return result
 }
 
-program_lookup_type :: proc(program: ^Program, type_name: string) -> ^Descriptor
+scope_lookup_type :: proc(scope: ^Scope, type_name: string) -> ^Descriptor
 {
-	value := scope_lookup_force(program.global_scope, type_name)
+	value := scope_lookup_force(scope, type_name)
 	assert(value.descriptor.type == .Type, "Type was not actually a type")
 	descriptor := value.descriptor.type_descriptor
 	assert(descriptor != nil, "Type somehow did not have a type_descriptor!")
@@ -605,14 +605,14 @@ Token_Match_End :: proc(state: ^Token_Matcher_State, peek_index: int)
 	assert(peek_index == len(state.tokens), "Did not match the right number of tokens")
 }
 
-token_force_type :: proc(program: ^Program, token: ^Token) -> ^Descriptor
+token_force_type :: proc(scope: ^Scope, token: ^Token) -> ^Descriptor
 {
 	descriptor: ^Descriptor
 	#partial switch token.type
 	{
 		case .Id:
 		{
-			descriptor = program_lookup_type(program, token.source)
+			descriptor = scope_lookup_type(scope, token.source)
 		}
 		case .Square:
 		{
@@ -621,7 +621,7 @@ token_force_type :: proc(program: ^Program, token: ^Token) -> ^Descriptor
 			descriptor = new_clone(Descriptor \
 			{
 				type = .Pointer,
-				data = {pointer_to = program_lookup_type(program, child.source)},
+				data = {pointer_to = scope_lookup_type(scope, child.source)},
 			})
 		}
 		case:
@@ -632,7 +632,41 @@ token_force_type :: proc(program: ^Program, token: ^Token) -> ^Descriptor
 	return descriptor
 }
 
-token_match_argument :: proc(state: ^Token_Matcher_State, program: ^Program) -> ^Token_Match_Arg
+token_pattern_callback :: #type proc([dynamic]^Token, ^Scope, ^Function_Builder) -> [dynamic]^Token
+
+token_rewrite_pattern :: proc(state: ^Token_Matcher_State, scope: ^Scope, builder: ^Function_Builder,
+                              pattern: ^[dynamic]^Token, callback: token_pattern_callback) -> bool
+{
+	pattern_length := len(pattern)
+	assert(pattern_length > 0, "Empty pattern passed to token_pattern_match");
+	for pattern_token, i in pattern^
+	{
+		token := token_peek_match(state, i, pattern_token); if token == nil do return false
+	}
+	match := make([dynamic]^Token, 0, pattern_length)
+	for _, i in pattern^
+	{
+		token := token_peek(state, i)
+		append(&match, token)
+	}
+	replacement := callback(match, scope, builder)
+	
+	replacement_length := len(replacement)
+	// FIXME support replacing with more tokens
+	assert(replacement_length <= pattern_length, "FIXME support replacing with more tokens")
+	from := state.start_index + replacement_length
+	deletion_length := pattern_length - replacement_length
+	remove_range(state.tokens, from, from + deletion_length)
+	
+	for token, i in &replacement
+	{
+		state.tokens[state.start_index + i] = token
+	}
+	
+	return true
+}
+
+token_match_argument :: proc(state: ^Token_Matcher_State, scope: ^Scope, builder: ^Function_Builder) -> ^Token_Match_Arg
 {
 	peek_index := 0
 	
@@ -644,7 +678,7 @@ token_match_argument :: proc(state: ^Token_Matcher_State, program: ^Program) -> 
 	return new_clone(Token_Match_Arg \
 	{
 		arg_name        = arg_id.source,
-		type_descriptor = token_force_type(program, arg_type),
+		type_descriptor = token_force_type(scope, arg_type),
 	})
 }
 
@@ -737,13 +771,12 @@ token_replace_tokens_in_state :: proc(state: ^Token_Matcher_State, length: int, 
 	remove_range(state.tokens, from, from + length)
 }
 
-token_rewrite_functions :: proc(state: ^Token_Matcher_State, program: ^Program) -> bool
+token_rewrite_functions_pattern_callback :: proc(match: [dynamic]^Token, scope: ^Scope, builder: ^Function_Builder) -> [dynamic]^Token
 {
-	peek_index := 0
-	args          := Token_Match(state, &peek_index, &Token{type = .Paren}); if args         == nil do return false
-	arrow         := Token_Match_Operator(state, &peek_index, "->");         if arrow        == nil do return false
-	return_types  := Token_Match(state, &peek_index, &Token{type = .Paren}); if return_types == nil do return false
-	body          := Token_Match(state, &peek_index, &Token{});              if body         == nil do return false
+	args          := match[0]
+	arrow         := match[1]
+	return_types  := match[2]
+	body          := match[3]
 	
 	result_token := new_clone(Token \
 	{
@@ -755,21 +788,42 @@ token_rewrite_functions :: proc(state: ^Token_Matcher_State, program: ^Program) 
 			args         = args,
 			return_types = return_types,
 			body         = body,
-			program      = program,
+			program      = builder.program,
 		}},
 	})
 	
-	token_replace_tokens_in_state(state, 4, result_token)
-	return true
+	return [dynamic]^Token \
+	{
+		result_token,
+	}
 }
 
-token_rewrite_constant_definitions :: proc(state: ^Token_Matcher_State, program: ^Program) -> bool
+token_rewrite_functions :: proc(state: ^Token_Matcher_State, scope: ^Scope, builder: ^Function_Builder) -> bool
+{
+	@static pattern: [dynamic]^Token
+	if pattern == nil
+	{
+		@static token_array: [4]^Token
+		pattern = mem.buffer_from_slice(token_array[:])
+		
+		@static args:         Token = {type = .Paren}
+		@static arrow:        Token = {type = .Operator, source = "->"}
+		@static return_types: Token = {type = .Paren}
+		@static body:         Token = {}
+		
+		append(&pattern, &args, &arrow, &return_types, &body)
+	}
+	
+	return token_rewrite_pattern(state, scope, builder, &pattern, token_rewrite_functions_pattern_callback)
+}
+
+token_rewrite_constant_definitions :: proc(state: ^Token_Matcher_State, scope: ^Scope, builder: ^Function_Builder) -> bool
 {
 	peek_index := 0
 	name   := Token_Match(state, &peek_index, &Token{type = .Id}); if name   == nil do return false
 	define := Token_Match_Operator(state, &peek_index, "::");      if define == nil do return false
 	value  := Token_Match(state, &peek_index, &Token{});           if value  == nil do return false
-	scope_define_lazy(program.global_scope, name.source, value)
+	scope_define_lazy(scope, name.source, value)
 	
 	// FIXME definition should rewrite with a token so that we can do proper
 	// checking inside statements and maybe pass it around.
@@ -895,7 +949,7 @@ token_rewrite_definitions :: proc(state: ^Token_Matcher_State, scope: ^Scope, bu
 	value: ^Value
 	if type.type == .Id
 	{
-		descriptor := program_lookup_type(builder.program, type.source)
+		descriptor := scope_lookup_type(scope, type.source)
 		value = Stack(descriptor)
 	}
 	else
@@ -954,12 +1008,12 @@ token_import_match_arguments :: proc(paren: ^Token, program: ^Program) -> ^Token
 	return token_value_make(paren, result, library_name_string, comma, symbol_name_string)
 }
 
-token_rewrite_dll_imports :: proc(state: ^Token_Matcher_State, program: ^Program) -> bool
+token_rewrite_dll_imports :: proc(state: ^Token_Matcher_State, scope: ^Scope, builder: ^Function_Builder) -> bool
 {
 	peek_index := 0
 	name := Token_Match(state, &peek_index, &Token{type = .Id, source = "import"}); if name == nil do return false
 	args := Token_Match(state, &peek_index, &Token{type = .Paren});                 if args == nil do return false
-	result_token := token_import_match_arguments(args, program)
+	result_token := token_import_match_arguments(args, builder.program)
 	
 	token_replace_tokens_in_state(state, 2, result_token)
 	return true
@@ -1023,21 +1077,6 @@ token_rewrite_less_than :: proc(state: ^Token_Matcher_State, scope: ^Scope, buil
 	return true
 }
 
-token_rewrite_callback :: #type proc(^Token_Matcher_State, ^Program) -> bool
-
-token_rewrite :: proc(state: ^Token_Matcher_State, program: ^Program, callback: token_rewrite_callback)
-{
-	retry: for
-	{
-		for i := 0; i < len(state.tokens); i += 1
-		{
-			state.start_index = i
-			if callback(state, program) do continue retry
-		}
-		break
-	}
-}
-
 token_rewrite_expression_callback :: #type proc(^Token_Matcher_State, ^Scope, ^Function_Builder) -> bool
 
 token_rewrite_expression :: proc(state: ^Token_Matcher_State, scope: ^Scope, builder: ^Function_Builder,
@@ -1058,7 +1097,7 @@ token_match_expression :: proc(state: ^Token_Matcher_State, scope: ^Scope, build
 {
 	if len(state.tokens) == 0 do return nil
 	
-	token_rewrite(state, builder.program, token_rewrite_functions)
+	token_rewrite_expression(state, scope, builder, token_rewrite_functions)
 	token_rewrite_expression(state, scope, builder, token_rewrite_negative_literal)
 	token_rewrite_expression(state, scope, builder, token_rewrite_function_calls)
 	token_rewrite_expression(state, scope, builder, token_rewrite_plus)
@@ -1078,7 +1117,7 @@ token_match_expression :: proc(state: ^Token_Matcher_State, scope: ^Scope, build
 			token_rewrite_expression(state, scope, builder, token_rewrite_explicit_return)
 			token_rewrite_expression(state, scope, builder, token_rewrite_statement_if)
 			token_rewrite_expression(state, scope, builder, token_rewrite_goto)
-			token_rewrite(state, builder.program, token_rewrite_constant_definitions)
+			token_rewrite_expression(state, scope, builder, token_rewrite_constant_definitions)
 			if len(state.tokens) != 0
 			{
 				assert(false, fmt.tprintf("Could not reduce an expression: %q", combine_token_sources(..state.tokens[:])))
@@ -1106,7 +1145,7 @@ token_force_lazy_function_definition :: proc(lazy_function_definition: ^Lazy_Fun
 			
 			for state, i in &argument_states
 			{
-				arg := token_match_argument(&state, program)
+				arg := token_match_argument(&state, function_scope, builder)
 				assert(arg != nil, "Ill-formed function argument declaration")
 				arg_value := Arg(arg.type_descriptor)
 				scope_define_value(function_scope, arg.arg_name, arg_value)
@@ -1121,7 +1160,7 @@ token_force_lazy_function_definition :: proc(lazy_function_definition: ^Lazy_Fun
 			case 1:
 			{
 				return_type_token := return_types.children[0]
-				fn_return_descriptor(builder, token_force_type(program, return_type_token), .Explicit)
+				fn_return_descriptor(builder, token_force_type(function_scope, return_type_token), .Explicit)
 			}
 			case 2:
 			{
@@ -1157,10 +1196,11 @@ token_match_module :: proc(token: ^Token, program: ^Program)
 	if len(token.children) == 0 do return
 	
 	state := &Token_Matcher_State{tokens = &token.children}
+	global_builder: Function_Builder = {program = program}
 	
-	token_rewrite(state, program, token_rewrite_dll_imports)
-	token_rewrite(state, program, token_rewrite_functions)
-	token_rewrite(state, program, token_rewrite_constant_definitions)
+	token_rewrite_expression(state, program.global_scope, &global_builder, token_rewrite_dll_imports)
+	token_rewrite_expression(state, program.global_scope, &global_builder, token_rewrite_functions)
+	token_rewrite_expression(state, program.global_scope, &global_builder, token_rewrite_constant_definitions)
 	
 	assert(len(token.children) == 0, "Unable to parse entire module")
 }

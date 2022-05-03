@@ -76,6 +76,7 @@ buffer_allocator_proc :: proc(allocator_data: rawptr, mode: mem.Allocator_Mode,
 			
 			if buffer.occupied + total_size > len(buffer.memory)
 			{
+				assert(false, "Out of Memory!")
 				return nil, .Out_Of_Memory
 			}
 			
@@ -124,6 +125,7 @@ buffer_allocator_proc :: proc(allocator_data: rawptr, mode: mem.Allocator_Mode,
 				
 				if old_buffer_occupied + new_total_size > len(buffer.memory)
 				{
+					assert(false, "Out of Memory!")
 					return nil, .Out_Of_Memory
 				}
 				
