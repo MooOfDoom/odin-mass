@@ -350,7 +350,7 @@ plus_or_minus :: proc(builder: ^Function_Builder, operation: Arithmetic_Operatio
 	     b.descriptor.type == .Integer &&
 	     b.descriptor.integer.byte_size == size_of(rawptr))
 	{
-		assert(same_value_type(a, b), "Types match in plus/minus")
+		assert(same_value_type_or_can_implicitly_move_cast(a, b), "Types match in plus/minus")
 		assert(a.descriptor.type == .Integer, "Plus/minus only works with integers")
 	}
 	
@@ -360,10 +360,12 @@ plus_or_minus :: proc(builder: ^Function_Builder, operation: Arithmetic_Operatio
 	result := maybe_constant_fold(a, b, operation)
 	if result != nil do return result
 	
-	temp_b := reserve_stack(builder, b.descriptor)
+	larger_descriptor := descriptor_byte_size(a.descriptor) > descriptor_byte_size(b.descriptor) ? a.descriptor : b.descriptor
+	
+	temp_b := reserve_stack(builder, larger_descriptor)
 	move_value(builder, temp_b, b)
 	
-	reg_a := value_register_for_descriptor(.A, a.descriptor)
+	reg_a := value_register_for_descriptor(.A, larger_descriptor)
 	move_value(builder, reg_a, a)
 	
 	#partial switch operation

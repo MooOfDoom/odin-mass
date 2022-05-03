@@ -829,6 +829,22 @@ token_rewrite_statement_if :: proc(state: ^Token_Matcher_State, scope: ^Scope, b
 	return true
 }
 
+token_rewrite_goto :: proc(state: ^Token_Matcher_State, scope: ^Scope, builder: ^Function_Builder) -> bool
+{
+	peek_index := 0
+	keyword    := Token_Match(state, &peek_index, &Token{type = .Id, source = "goto"}); if keyword    == nil do return false
+	label_name := Token_Match(state, &peek_index, &Token{type = .Id});                  if label_name == nil do return false
+	Token_Match_End(state, peek_index)
+	value := scope_lookup_force(scope, label_name.source, builder)
+	assert(value.descriptor.type == .Void, "Label name in goto did not resolve to type Void")
+	assert(value.operand.type == .Label_32, "Label name in goto did not reslove to a label")
+	
+	goto(builder, value.operand.label32)
+	
+	token_replace_tokens_in_state(state, 2)
+	return true
+}
+
 token_rewrite_explicit_return :: proc(state: ^Token_Matcher_State, scope: ^Scope, builder: ^Function_Builder) -> bool
 {
 	peek_index := 0
@@ -873,13 +889,23 @@ token_rewrite_negative_literal :: proc(state: ^Token_Matcher_State, scope: ^Scop
 token_rewrite_definitions :: proc(state: ^Token_Matcher_State, scope: ^Scope, builder: ^Function_Builder) -> bool
 {
 	peek_index := 0
-	name       := Token_Match(state, &peek_index, &Token{type = .Id}); if name       == nil do return false
-	define     := Token_Match_Operator(state, &peek_index, ":");       if define     == nil do return false
-	token_type := Token_Match(state, &peek_index, &Token{type = .Id}); if token_type == nil do return false
-	
-	descriptor := program_lookup_type(builder.program, token_type.source)
-	var := Stack(descriptor)
-	scope_define_value(scope, name.source, var)
+	name   := Token_Match(state, &peek_index, &Token{type = .Id}); if name   == nil do return false
+	define := Token_Match_Operator(state, &peek_index, ":");       if define == nil do return false
+	type   := Token_Match(state, &peek_index, &Token{});           if type   == nil do return false
+	value: ^Value
+	if type.type == .Id
+	{
+		descriptor := program_lookup_type(builder.program, type.source)
+		value = Stack(descriptor)
+	}
+	else
+	{
+		value = token_force_value(type, scope, builder)
+		assert(value.descriptor.type == .Void, "Non-id definition was not type Void")
+		assert(value.operand.type == .Label_32, "Non-id definition was not a label")
+		label_(builder, value.operand.label32)
+	}
+	scope_define_value(scope, name.source, value)
 	
 	// FIXME definition should rewrite with a token so that we can do proper
 	// checking inside statements and maybe pass it around.
@@ -969,6 +995,20 @@ token_rewrite_plus :: proc(state: ^Token_Matcher_State, scope: ^Scope, builder: 
 	return true
 }
 
+token_rewrite_label :: proc(state: ^Token_Matcher_State, scope: ^Scope, builder: ^Function_Builder) -> bool
+{
+	peek_index := 0
+	keyword := Token_Match(state, &peek_index, &Token{type = .Id, source = "label"}); if keyword == nil do return false
+	
+	value := new_clone(Value \
+	{
+		descriptor = &descriptor_void,
+		operand    = label32(make_label()),
+	})
+	token_replace_tokens_in_state(state, 1, token_value_make(keyword, value, keyword))
+	return true
+}
+
 token_rewrite_less_than :: proc(state: ^Token_Matcher_State, scope: ^Scope, builder: ^Function_Builder) -> bool
 {
 	peek_index := 0
@@ -1023,6 +1063,7 @@ token_match_expression :: proc(state: ^Token_Matcher_State, scope: ^Scope, build
 	token_rewrite_expression(state, scope, builder, token_rewrite_function_calls)
 	token_rewrite_expression(state, scope, builder, token_rewrite_plus)
 	token_rewrite_expression(state, scope, builder, token_rewrite_less_than)
+	token_rewrite_expression(state, scope, builder, token_rewrite_label)
 	
 	switch len(state.tokens)
 	{
@@ -1036,10 +1077,11 @@ token_match_expression :: proc(state: ^Token_Matcher_State, scope: ^Scope, build
 			token_rewrite_expression(state, scope, builder, token_rewrite_definitions)
 			token_rewrite_expression(state, scope, builder, token_rewrite_explicit_return)
 			token_rewrite_expression(state, scope, builder, token_rewrite_statement_if)
+			token_rewrite_expression(state, scope, builder, token_rewrite_goto)
 			token_rewrite(state, builder.program, token_rewrite_constant_definitions)
 			if len(state.tokens) != 0
 			{
-				assert(false, fmt.tprintf("Could not reduce an expression from %q", combine_token_sources(..state.tokens[:])))
+				assert(false, fmt.tprintf("Could not reduce an expression: %q", combine_token_sources(..state.tokens[:])))
 			}
 			return nil
 		}

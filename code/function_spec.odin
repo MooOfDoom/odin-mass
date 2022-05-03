@@ -254,6 +254,39 @@ is_positive :: (x : s32) -> (s8)
 		check(is_positive_fn(-42) == 0)
 	})
 	
+	it("should be able to parse and run a program with labels and goto", proc()
+	{
+		program := &test_program
+		
+		source := `
+sum_up_to :: (x : s32) -> (s32)
+{
+	sum : s32;
+	sum = 0;
+	loop : label;
+	if x < 0 { return sum };
+	sum = sum + x;
+	x = x + (-1);
+	goto loop;
+}`
+		
+		result := tokenize("_test_.mass", source)
+		check(result.type == .Success)
+		
+		token_match_module(result.root, program)
+		
+		sum_up_to := scope_lookup_force(program.global_scope, "sum_up_to")
+
+		program_end(program)
+		
+		sum_up_to_fn := value_as_function(sum_up_to, fn_i32_to_i32)
+		
+		check(sum_up_to_fn(0) == 0)
+		check(sum_up_to_fn(1) == 1)
+		check(sum_up_to_fn(2) == 3)
+		check(sum_up_to_fn(3) == 6)
+	})
+	
 	it("should be able to parse and run functions with local overloads", proc()
 	{
 		program := &test_program
