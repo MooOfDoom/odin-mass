@@ -287,6 +287,29 @@ sum_up_to :: (x : s32) -> (s32)
 		check(sum_up_to_fn(3) == 6)
 	})
 	
+	it("should be able to define and use a macro", proc()
+	{
+		program := &test_program
+		
+		source := `
+// macro (negative _x) (-x)
+macro (the answer) (42)
+checker :: () -> (s32) { the answer }`
+		
+		result := tokenize("_test_.mass", source)
+		check(result.type == .Success)
+		
+		token_match_module(result.root, program)
+		
+		checker := scope_lookup_force(program.global_scope, "checker")
+
+		program_end(program)
+		
+		checker_fn := value_as_function(checker, fn_void_to_i32)
+		
+		check(checker_fn() == 42)
+	})
+	
 	it("should be able to parse and run functions with local overloads", proc()
 	{
 		program := &test_program

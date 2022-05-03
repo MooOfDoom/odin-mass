@@ -68,10 +68,18 @@ Scope_Entry :: struct
 	},
 }
 
+Macro :: struct
+{
+	pattern:       [dynamic]^Token,
+	replacement:   [dynamic]^Token,
+	pattern_names: [dynamic]string,
+}
+
 Scope :: struct
 {
 	parent: ^Scope,
 	items:  map[string]Scope_Entry,
+	macros: [dynamic]^Macro,
 }
 
 scope_make :: proc(parent: ^Scope = nil) -> ^Scope
@@ -634,23 +642,25 @@ token_force_type :: proc(scope: ^Scope, token: ^Token) -> ^Descriptor
 
 token_pattern_callback :: #type proc([dynamic]^Token, ^Scope, ^Function_Builder) -> [dynamic]^Token
 
-token_rewrite_pattern :: proc(state: ^Token_Matcher_State, scope: ^Scope, builder: ^Function_Builder,
-                              pattern: ^[dynamic]^Token, callback: token_pattern_callback) -> bool
+token_match_pattern :: proc(state: ^Token_Matcher_State, pattern: [dynamic]^Token) -> [dynamic]^Token
 {
 	pattern_length := len(pattern)
-	assert(pattern_length > 0, "Empty pattern passed to token_pattern_match");
-	for pattern_token, i in pattern^
+	assert(pattern_length > 0, "Empty pattern passed to token_match_pattern");
+	for pattern_token, i in pattern
 	{
-		token := token_peek_match(state, i, pattern_token); if token == nil do return false
+		token := token_peek_match(state, i, pattern_token); if token == nil do return nil
 	}
 	match := make([dynamic]^Token, 0, pattern_length)
-	for _, i in pattern^
+	for _, i in pattern
 	{
 		token := token_peek(state, i)
 		append(&match, token)
 	}
-	replacement := callback(match, scope, builder)
-	
+	return match
+}
+
+token_replace_length_with_tokens :: proc(state: ^Token_Matcher_State, pattern_length: int, replacement: [dynamic]^Token)
+{
 	replacement_length := len(replacement)
 	// FIXME support replacing with more tokens
 	assert(replacement_length <= pattern_length, "FIXME support replacing with more tokens")
@@ -658,12 +668,47 @@ token_rewrite_pattern :: proc(state: ^Token_Matcher_State, scope: ^Scope, builde
 	deletion_length := pattern_length - replacement_length
 	remove_range(state.tokens, from, from + deletion_length)
 	
-	for token, i in &replacement
+	for token, i in replacement
 	{
 		state.tokens[state.start_index + i] = token
 	}
-	
+}
+
+token_rewrite_pattern :: proc(state: ^Token_Matcher_State, scope: ^Scope, builder: ^Function_Builder,
+                              pattern: [dynamic]^Token, callback: token_pattern_callback) -> bool
+{
+	match := token_match_pattern(state, pattern)
+	if match == nil do return false
+	replacement := callback(match, scope, builder)
+	token_replace_length_with_tokens(state, len(pattern), replacement)
+	// delete(match)
 	return true
+}
+
+token_rewrite_macros :: proc(state: ^Token_Matcher_State, scope: ^Scope, builder: ^Function_Builder)
+{
+	for scope := scope; scope != nil; scope = scope.parent
+	{
+		for macro in scope.macros
+		{
+			retry: for
+			{
+				for i := 0; i < len(state.tokens); i += 1
+				{
+					state.start_index = i
+					match := token_match_pattern(state, macro.pattern)
+					if match != nil
+					{
+						// TODO do capture expansion
+						token_replace_length_with_tokens(state, len(macro.pattern), macro.replacement)
+						// delete(match)
+						continue retry
+					}
+				}
+				break
+			}
+		}
+	}
 }
 
 token_match_argument :: proc(state: ^Token_Matcher_State, scope: ^Scope, builder: ^Function_Builder) -> ^Token_Match_Arg
@@ -798,6 +843,11 @@ token_rewrite_functions_pattern_callback :: proc(match: [dynamic]^Token, scope: 
 	}
 }
 
+scope_add_macro :: proc(scope: ^Scope, macro: ^Macro)
+{
+	append(&scope.macros, macro)
+}
+
 token_rewrite_functions :: proc(state: ^Token_Matcher_State, scope: ^Scope, builder: ^Function_Builder) -> bool
 {
 	@static pattern: [dynamic]^Token
@@ -814,7 +864,47 @@ token_rewrite_functions :: proc(state: ^Token_Matcher_State, scope: ^Scope, buil
 		append(&pattern, &args, &arrow, &return_types, &body)
 	}
 	
-	return token_rewrite_pattern(state, scope, builder, &pattern, token_rewrite_functions_pattern_callback)
+	return token_rewrite_pattern(state, scope, builder, pattern, token_rewrite_functions_pattern_callback)
+}
+
+token_rewrite_macro_definitions :: proc(state: ^Token_Matcher_State, scope: ^Scope, builder: ^Function_Builder) -> bool
+{
+	peek_index := 0
+	keyword           := Token_Match(state, &peek_index, &Token{type = .Id, source = "macro"}); if keyword           == nil do return false
+	pattern_token     := Token_Match(state, &peek_index, &Token{type = .Paren});                if pattern_token     == nil do return false
+	replacement_token := Token_Match(state, &peek_index, &Token{type = .Paren});                if replacement_token == nil do return false
+	token_replace_tokens_in_state(state, 3)
+	
+	pattern       := make([dynamic]^Token, 0, 16)
+	pattern_names := make([dynamic]string, 0, 16)
+	
+	for token, i in pattern_token.children
+	{
+		if token.type == .Id && strings.has_prefix(token.source, "_")
+		{
+			name := token.source[1:]
+			append(&pattern_names, name)
+			// ?
+			item := new(Token)
+			append(&pattern, item)
+		}
+		else
+		{
+			append(&pattern_names, "")
+			append(&pattern, token)
+		}
+	}
+	
+	macro := new_clone(Macro \
+	{
+		pattern       = pattern,
+		pattern_names = pattern_names,
+		replacement   = replacement_token.children,
+	})
+	
+	scope_add_macro(scope, macro)
+	
+	return true
 }
 
 token_rewrite_constant_definitions :: proc(state: ^Token_Matcher_State, scope: ^Scope, builder: ^Function_Builder) -> bool
@@ -1097,6 +1187,8 @@ token_match_expression :: proc(state: ^Token_Matcher_State, scope: ^Scope, build
 {
 	if len(state.tokens) == 0 do return nil
 	
+	token_rewrite_macros(state, scope, builder)
+	
 	token_rewrite_expression(state, scope, builder, token_rewrite_functions)
 	token_rewrite_expression(state, scope, builder, token_rewrite_negative_literal)
 	token_rewrite_expression(state, scope, builder, token_rewrite_function_calls)
@@ -1198,6 +1290,7 @@ token_match_module :: proc(token: ^Token, program: ^Program)
 	state := &Token_Matcher_State{tokens = &token.children}
 	global_builder: Function_Builder = {program = program}
 	
+	token_rewrite_expression(state, program.global_scope, &global_builder, token_rewrite_macro_definitions)
 	token_rewrite_expression(state, program.global_scope, &global_builder, token_rewrite_dll_imports)
 	token_rewrite_expression(state, program.global_scope, &global_builder, token_rewrite_functions)
 	token_rewrite_expression(state, program.global_scope, &global_builder, token_rewrite_constant_definitions)
