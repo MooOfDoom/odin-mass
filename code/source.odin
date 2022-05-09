@@ -4,6 +4,8 @@ import "core:fmt"
 import "core:mem"
 import "core:strconv"
 import "core:strings"
+import "core:runtime"
+import "core:sys/win32"
 import "core:unicode"
 import "core:unicode/utf8"
 
@@ -685,6 +687,86 @@ token_rewrite_pattern :: proc(state: ^Token_Matcher_State, scope: ^Scope, builde
 	return true
 }
 
+token_clone_token_array_deep :: proc(match: [dynamic]^Token) -> [dynamic]^Token
+{
+	result := make([dynamic]^Token, 0, len(match), match.allocator)
+	for token in match
+	{
+		copy := new_clone(token^)
+		switch token.type
+		{
+			case .Integer, .Operator, .String, .Id:
+			{
+				// Nothing to do
+			}
+			case .Square, .Paren, .Curly, .Module:
+			{
+				copy.children = token_clone_token_array_deep(token.children)
+			}
+			case .Value, .Lazy_Function_Definition:
+			{
+				assert(false, "Not reached")
+			}
+		}
+		append(&result, copy)
+	}
+	return result
+}
+
+token_apply_macro_replacements :: proc(map_: map[string]^Token, source: [dynamic]^Token) -> [dynamic]^Token
+{
+	result := make([dynamic]^Token, 0, len(source), source.allocator)
+	for token in source
+	{
+		copy := new_clone(token^)
+		switch token.type
+		{
+			case .Id:
+			{
+				name := token.source
+				replacement_ptr := &map_[name]
+				if replacement_ptr != nil
+				{
+					copy^ = replacement_ptr^^
+				}
+			}
+			case .Integer, .Operator, .String:
+			{
+				// Nothing to do
+			}
+			case .Square, .Paren, .Curly, .Module:
+			{
+				copy.children = token_apply_macro_replacements(map_, token.children)
+			}
+			case .Value, .Lazy_Function_Definition:
+			{
+				assert(false, "Not reached")
+			}
+		}
+		append(&result, copy)
+	}
+	return result
+}
+
+token_rewrite_macro_match :: proc(state: ^Token_Matcher_State, macro: ^Macro, match: [dynamic]^Token)
+{
+	assert(len(macro.pattern_names) == len(match), "Pattern names and matched tokens did not have the same length")
+	map_ := make(map[string]^Token, 16, runtime.default_allocator())
+	for name, i in macro.pattern_names
+	{
+		if name != ""
+		{
+			map_[name] = match[i]
+		}
+	}
+	// TODO do capture expansion
+	token_replace_length_with_tokens(state,
+	                                 len(macro.pattern),
+	                                 token_apply_macro_replacements(map_, macro.replacement))
+	// delete(match)
+	delete(map_)
+}
+
 token_rewrite_macros :: proc(state: ^Token_Matcher_State, scope: ^Scope, builder: ^Function_Builder)
 {
 	for scope := scope; scope != nil; scope = scope.parent
@@ -699,9 +781,7 @@ token_rewrite_macros :: proc(state: ^Token_Matcher_State, scope: ^Scope, builder
 					match := token_match_pattern(state, macro.pattern)
 					if match != nil
 					{
-						// TODO do capture expansion
-						token_replace_length_with_tokens(state, len(macro.pattern), macro.replacement)
-						// delete(match)
+						token_rewrite_macro_match(state, macro, match)
 						continue retry
 					}
 				}
@@ -767,11 +847,16 @@ token_force_value :: proc(token: ^Token, scope: ^Scope, builder: ^Function_Build
 		state: Token_Matcher_State = {tokens = &token.children}
 		return token_match_expression(&state, scope, builder)
 	}
+	else if token.type == .Curly
+	{
+		assert(builder != nil, "Curly forced to value without builder")
+		return token_parse_block(token, scope, builder)
+	}
 	else
 	{
-		assert(false, "Not implemented", loc)
+		assert(false, fmt.tprintf("Not implemented: %v", token.type), loc)
 	}
-	assert(result_value != nil, "Token could not be forced into value", loc)
+	assert(result_value != nil, fmt.tprintf("Token could not be forced into value: %q", token.source), loc)
 	return result_value
 }
 
@@ -884,7 +969,6 @@ token_rewrite_macro_definitions :: proc(state: ^Token_Matcher_State, scope: ^Sco
 		{
 			name := token.source[1:]
 			append(&pattern_names, name)
-			// ?
 			item := new(Token)
 			append(&pattern, item)
 		}
@@ -961,7 +1045,7 @@ token_rewrite_statement_if :: proc(state: ^Token_Matcher_State, scope: ^Scope, b
 {
 	peek_index := 0
 	keyword   := Token_Match(state, &peek_index, &Token{type = .Id, source = "if"}); if keyword   == nil do return false
-	condition := Token_Match(state, &peek_index, &Token{});                          if condition == nil do return false
+	condition := Token_Match(state, &peek_index, &Token{type = .Paren});             if condition == nil do return false
 	body      := Token_Match(state, &peek_index, &Token{type = .Curly});             if body      == nil do return false
 	Token_Match_End(state, peek_index)
 	
@@ -1167,6 +1251,20 @@ token_rewrite_less_than :: proc(state: ^Token_Matcher_State, scope: ^Scope, buil
 	return true
 }
 
+token_rewrite_greater_than :: proc(state: ^Token_Matcher_State, scope: ^Scope, builder: ^Function_Builder) -> bool
+{
+	peek_index := 0
+	lhs           := Token_Match(state, &peek_index, &Token{});     if lhs           == nil do return false
+	greater_token := Token_Match_Operator(state, &peek_index, ">"); if greater_token == nil do return false
+	rhs           := Token_Match(state, &peek_index, &Token{});     if rhs           == nil do return false
+	
+	value := compare(builder, .Greater,
+	                 token_force_value(lhs, scope, builder),
+	                 token_force_value(rhs, scope, builder))
+	token_replace_tokens_in_state(state, 3, token_value_make(greater_token, value, lhs, greater_token, rhs))
+	return true
+}
+
 token_rewrite_expression_callback :: #type proc(^Token_Matcher_State, ^Scope, ^Function_Builder) -> bool
 
 token_rewrite_expression :: proc(state: ^Token_Matcher_State, scope: ^Scope, builder: ^Function_Builder,
@@ -1188,12 +1286,14 @@ token_match_expression :: proc(state: ^Token_Matcher_State, scope: ^Scope, build
 	if len(state.tokens) == 0 do return nil
 	
 	token_rewrite_macros(state, scope, builder)
+	token_rewrite_expression(state, scope, builder, token_rewrite_statement_if)
 	
 	token_rewrite_expression(state, scope, builder, token_rewrite_functions)
 	token_rewrite_expression(state, scope, builder, token_rewrite_negative_literal)
 	token_rewrite_expression(state, scope, builder, token_rewrite_function_calls)
 	token_rewrite_expression(state, scope, builder, token_rewrite_plus)
 	token_rewrite_expression(state, scope, builder, token_rewrite_less_than)
+	token_rewrite_expression(state, scope, builder, token_rewrite_greater_than)
 	token_rewrite_expression(state, scope, builder, token_rewrite_label)
 	
 	switch len(state.tokens)
@@ -1207,7 +1307,6 @@ token_match_expression :: proc(state: ^Token_Matcher_State, scope: ^Scope, build
 			token_rewrite_expression(state, scope, builder, token_rewrite_assignments)
 			token_rewrite_expression(state, scope, builder, token_rewrite_definitions)
 			token_rewrite_expression(state, scope, builder, token_rewrite_explicit_return)
-			token_rewrite_expression(state, scope, builder, token_rewrite_statement_if)
 			token_rewrite_expression(state, scope, builder, token_rewrite_goto)
 			token_rewrite_expression(state, scope, builder, token_rewrite_constant_definitions)
 			if len(state.tokens) != 0
@@ -1296,4 +1395,59 @@ token_match_module :: proc(token: ^Token, program: ^Program)
 	token_rewrite_expression(state, program.global_scope, &global_builder, token_rewrite_constant_definitions)
 	
 	assert(len(token.children) == 0, "Unable to parse entire module")
+}
+
+program_import_file_internal :: proc(program: ^Program, file_path: string) -> bool
+{
+	file_handle := win32.create_file_w(win32.utf8_to_wstring(file_path),
+	                                   win32.FILE_GENERIC_READ,
+	                                   win32.FILE_SHARE_READ,
+	                                   nil,
+	                                   win32.OPEN_EXISTING,
+	                                   win32.FILE_ATTRIBUTE_NORMAL,
+	                                   nil)
+	if file_handle == win32.INVALID_HANDLE
+	{
+		fmt.printf("Could not open file %q\n", file_path)
+		return false
+	}
+	
+	buffer_size: i64
+	win32.get_file_size_ex(file_handle, &buffer_size)
+	buffer := make_buffer(int(buffer_size), PAGE_READWRITE)
+	bytes_read: i32
+	is_success := win32.read_file(file_handle, &buffer.memory[0], u32(buffer_size), &bytes_read, nil)
+	win32.close_handle(file_handle)
+	file_handle = nil
+	if !is_success
+	{
+		fmt.printf("Could not read file %q\n", file_path)
+		return false
+	}
+	buffer.occupied = int(bytes_read)
+	
+	source := string(buffer.memory)
+	
+	result := tokenize(file_path, source)
+	if result.type != .Success
+	{
+		for error in &result.errors
+		{
+			print_message_with_location(error.message, &error.location)
+		}
+		return false
+	}
+	
+	token_match_module(result.root, program)
+	return true
+}
+
+program_import_file :: proc(program: ^Program, file_path: string) -> bool
+{
+	file_path := file_path
+	if !strings.has_suffix(file_path, ".mass")
+	{
+		file_path = fmt.tprintf("%s.mass", file_path)
+	}
+	return program_import_file_internal(program, file_path)
 }

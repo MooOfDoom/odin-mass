@@ -234,7 +234,7 @@ checker :: (x : s32) -> (s32)
 		source := `
 is_positive :: (x : s32) -> (s8)
 {
-	if x < 0 { return 0 };
+	if (x < 0) { return 0 };
 	1
 }`
 		
@@ -264,7 +264,7 @@ sum_up_to :: (x : s32) -> (s32)
 	sum : s32;
 	sum = 0;
 	loop : label;
-	if x < 0 { return sum };
+	if (x < 0) { return sum };
 	sum = sum + x;
 	x = x + (-1);
 	goto loop;
@@ -287,12 +287,11 @@ sum_up_to :: (x : s32) -> (s32)
 		check(sum_up_to_fn(3) == 6)
 	})
 	
-	it("should be able to define and use a macro", proc()
+	it("should be able to define and use a macro without a capture", proc()
 	{
 		program := &test_program
 		
 		source := `
-// macro (negative _x) (-x)
 macro (the answer) (42)
 checker :: () -> (s32) { the answer }`
 		
@@ -308,6 +307,60 @@ checker :: () -> (s32) { the answer }`
 		checker_fn := value_as_function(checker, fn_void_to_i32)
 		
 		check(checker_fn() == 42)
+	})
+	
+	it("should be able to define and use a macro with a capture", proc()
+	{
+		program := &test_program
+		
+		source := `
+macro (negative _x) (- x)
+checker :: () -> (s32) { negative 42 }`
+		
+		result := tokenize("_test_.mass", source)
+		check(result.type == .Success)
+		
+		token_match_module(result.root, program)
+		
+		checker := scope_lookup_force(program.global_scope, "checker")
+
+		program_end(program)
+		
+		checker_fn := value_as_function(checker, fn_void_to_i32)
+		
+		check(checker_fn() == -42)
+	})
+	
+	it("should be able to define and use a macro for a while loop", proc()
+	{
+		program := &test_program
+		program_import_file(program, "lib\\prelude")
+		source := `
+sum_up_to :: (x : s32) -> (s32) {
+	sum : s32;
+	sum = 0;
+	while (x > 0) {
+		sum = sum + x;
+		x = x + (-1);
+	};
+	return sum
+}`
+		
+		result := tokenize("_test_.mass", source)
+		check(result.type == .Success)
+		
+		token_match_module(result.root, program)
+		
+		sum_up_to := scope_lookup_force(program.global_scope, "sum_up_to")
+
+		program_end(program)
+		
+		sum_up_to_fn := value_as_function(sum_up_to, fn_i32_to_i32)
+		
+		check(sum_up_to_fn(0) == 0)
+		check(sum_up_to_fn(1) == 1)
+		check(sum_up_to_fn(2) == 3)
+		check(sum_up_to_fn(3) == 6)
 	})
 	
 	it("should be able to parse and run functions with local overloads", proc()
@@ -388,7 +441,6 @@ main :: () -> () {
 	WriteFile(GetStdHandle(-11), "Hello, World!", 13, 0, 0);
 	ExitProcess(0)
 }`
-		fmt.printf("%q\n", source)
 		result := tokenize("_test_.mass", source)
 		check(result.type == .Success)
 		
