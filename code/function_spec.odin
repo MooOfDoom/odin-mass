@@ -331,6 +331,19 @@ checker :: () -> (s32) { negative 42 }`
 		check(checker_fn() == -42)
 	})
 	
+	it("should be able to program fizz buzz", proc()
+	{
+		program := &test_program
+		program_import_file(program, "lib\\prelude")
+		program_import_file(program, "fixtures\\fizz_buzz")
+		
+		fizz_buzz := scope_lookup_force(program.global_scope, "fizz_buzz")
+
+		program_end(program)
+		
+		value_as_function(fizz_buzz, fn_void_to_void)()
+	})
+	
 	it("should be able to define and use a macro for a while loop", proc()
 	{
 		program := &test_program

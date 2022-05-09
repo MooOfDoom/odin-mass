@@ -1005,24 +1005,6 @@ token_rewrite_constant_definitions :: proc(state: ^Token_Matcher_State, scope: ^
 	return true
 }
 
-token_rewrite_definition_and_assignment_statements :: proc(state: ^Token_Matcher_State, scope: ^Scope,
-                                                           builder: ^Function_Builder) -> bool
-{
-	peek_index := 0
-	name        := Token_Match(state, &peek_index, &Token{type = .Id}); if name        == nil do return false
-	define      := Token_Match_Operator(state, &peek_index, ":=");      if define      == nil do return false
-	token_value := Token_Match(state, &peek_index, &Token{});           if token_value == nil do return false
-	
-	value := token_force_value(token_value, scope, builder)
-	var := Stack(value.descriptor, value)
-	scope_define_value(scope, name.source, var)
-	
-	// FIXME definition should rewrite with a token so that we can do proper
-	// checking inside statements and maybe pass it around.
-	token_replace_tokens_in_state(state, 3)
-	return true
-}
-
 token_parse_block :: proc(block: ^Token, scope: ^Scope, builder: ^Function_Builder) -> ^Value
 {
 	// TODO push an extra scope
@@ -1114,26 +1096,152 @@ token_rewrite_negative_literal :: proc(state: ^Token_Matcher_State, scope: ^Scop
 	return true
 }
 
+token_rewrite_pointer_to :: proc(state: ^Token_Matcher_State, scope: ^Scope, builder: ^Function_Builder) -> bool
+{
+	peek_index := 0
+	and         := Token_Match_Operator(state, &peek_index, "&"); if and         == nil do return false
+	value_token := Token_Match(state, &peek_index, &Token{});     if value_token == nil do return false
+	
+	result := value_pointer_to(builder, token_force_value(value_token, scope, builder))
+	token_replace_tokens_in_state(state, 2, token_value_make(value_token, result, and, value_token))
+	return true
+}
+
+token_rewrite_set_array_item :: proc(state: ^Token_Matcher_State, scope: ^Scope, builder: ^Function_Builder) -> bool
+{
+	peek_index := 0
+	id         := Token_Match(state, &peek_index, &Token{type = .Id, source = "set_array_item"}); if id         == nil do return false
+	args_token := Token_Match(state, &peek_index, &Token{type = .Paren});                         if args_token == nil do return false
+	
+	args := token_match_call_arguments(args_token, scope, builder)
+	assert(len(args) == 3, "set_array_item takes exactly 3 arguments")
+	// TODO check for array type
+	array       := args[0]
+	index_value := args[1]
+	value       := args[2]
+	
+	item_descriptor := array.descriptor.pointer_to.array.item
+	item_byte_size := descriptor_byte_size(item_descriptor)
+	
+	reg_a := value_register_for_descriptor(.A, array.descriptor)
+	move_value(builder, reg_a, array)
+	
+	// FIXME allow bigger than byte
+	assert(index_value.operand.type == .Immediate_8, "Array index was not Immediate_8")
+	// assert(operand_is_immediate(&index_value.operand), "Array size did not have an immediate operand")
+	index := index_value.operand.imm8
+	
+	target_value := new_clone(Value \
+	{
+		descriptor = item_descriptor,
+		operand =
+		{
+			type      = .Memory_Indirect,
+			byte_size = item_byte_size,
+			data      = {indirect = {
+				reg          = rax.reg,
+				displacement = i32(index) * item_byte_size,
+			}},
+		},
+	})
+	move_value(builder, target_value, value)
+	
+	token_replace_tokens_in_state(state, 2)
+	return true
+}
+
+token_match_label :: proc(state: ^Token_Matcher_State, scope: ^Scope, builder: ^Function_Builder) -> ^Label
+{
+	peek_index := 0
+	keyword := Token_Match(state, &peek_index, &Token{type = .Id, source = "label"}); if keyword == nil do return nil
+	Token_Match_End(state, peek_index)
+	
+	return make_label()
+}
+
+token_match_fixed_array_type :: proc(state: ^Token_Matcher_State, scope: ^Scope, builder: ^Function_Builder) -> ^Descriptor
+{
+	peek_index := 0
+	type          := Token_Match(state, &peek_index, &Token{type = .Id});     if type          == nil do return nil
+	square_braces := Token_Match(state, &peek_index, &Token{type = .Square}); if square_braces == nil do return nil
+	
+	descriptor := scope_lookup_type(scope, type.source)
+	
+	// FIXME allow any constant expression here
+	assert(len(square_braces.children) == 1, "More than one token found in array size declaration")
+	size_token := square_braces.children[0]
+	assert(size_token.type == .Integer, "Array size was not integer")
+	integer := token_force_value(size_token, scope, builder)
+	
+	// FIXME allow bigger than byte
+	assert(integer.operand.type == .Immediate_8, "Array size was not Immediate_8")
+	// assert(operand_is_immediate(&integer.operand), "Array size did not have an immediate operand")
+	size := integer.operand.imm8
+	
+	// TODO extract into a helper
+	array_descriptor := new_clone(Descriptor \
+	{
+		type = .Fixed_Size_Array,
+		data = {array =
+		{
+			item = descriptor,
+			length = i32(size),
+		}},
+	})
+	return array_descriptor
+}
+
 token_rewrite_definitions :: proc(state: ^Token_Matcher_State, scope: ^Scope, builder: ^Function_Builder) -> bool
 {
 	peek_index := 0
 	name   := Token_Match(state, &peek_index, &Token{type = .Id}); if name   == nil do return false
 	define := Token_Match_Operator(state, &peek_index, ":");       if define == nil do return false
-	type   := Token_Match(state, &peek_index, &Token{});           if type   == nil do return false
-	value: ^Value
-	if type.type == .Id
+	
+	rest_slice := state.tokens[state.start_index + peek_index:]
+	rest := mem.buffer_from_slice(rest_slice)
+	resize(&rest, len(rest_slice))
+	rest_state: Token_Matcher_State = {tokens = &rest}
+	resize(state.tokens, state.start_index)
+	
+	label := token_match_label(&rest_state, scope, builder)
+	if label != nil
 	{
-		descriptor := scope_lookup_type(scope, type.source)
-		value = Stack(descriptor)
+		label_(builder, label)
+		value := new_clone(Value \
+		{
+			descriptor = &descriptor_void,
+			operand = label32(label),
+		})
+		scope_define_value(scope, name.source, value)
+		return true
 	}
-	else
+	
+	descriptor := token_match_fixed_array_type(&rest_state, scope, builder)
+	if descriptor == nil
 	{
-		value = token_force_value(type, scope, builder)
-		assert(value.descriptor.type == .Void, "Non-id definition was not type Void")
-		assert(value.operand.type == .Label_32, "Non-id definition was not a label")
-		label_(builder, value.operand.label32)
+		assert(len(rest) == 1, fmt.tprintf("Non-array type was not a single token: %v", rest))
+		type := rest[0]
+		assert(type.type == .Id, "Non-array type was not an identifier")
+		descriptor = scope_lookup_type(scope, type.source)
 	}
+	
+	value := reserve_stack(builder, descriptor)
 	scope_define_value(scope, name.source, value)
+	
+	return true
+}
+
+token_rewrite_definition_and_assignment_statements :: proc(state: ^Token_Matcher_State, scope: ^Scope,
+                                                           builder: ^Function_Builder) -> bool
+{
+	peek_index := 0
+	name        := Token_Match(state, &peek_index, &Token{type = .Id}); if name        == nil do return false
+	define      := Token_Match_Operator(state, &peek_index, ":=");      if define      == nil do return false
+	token_value := Token_Match(state, &peek_index, &Token{});           if token_value == nil do return false
+	
+	value := token_force_value(token_value, scope, builder)
+	var := Stack(value.descriptor, value)
+	scope_define_value(scope, name.source, var)
 	
 	// FIXME definition should rewrite with a token so that we can do proper
 	// checking inside statements and maybe pass it around.
@@ -1223,20 +1331,6 @@ token_rewrite_plus :: proc(state: ^Token_Matcher_State, scope: ^Scope, builder: 
 	return true
 }
 
-token_rewrite_label :: proc(state: ^Token_Matcher_State, scope: ^Scope, builder: ^Function_Builder) -> bool
-{
-	peek_index := 0
-	keyword := Token_Match(state, &peek_index, &Token{type = .Id, source = "label"}); if keyword == nil do return false
-	
-	value := new_clone(Value \
-	{
-		descriptor = &descriptor_void,
-		operand    = label32(make_label()),
-	})
-	token_replace_tokens_in_state(state, 1, token_value_make(keyword, value, keyword))
-	return true
-}
-
 token_rewrite_less_than :: proc(state: ^Token_Matcher_State, scope: ^Scope, builder: ^Function_Builder) -> bool
 {
 	peek_index := 0
@@ -1287,14 +1381,16 @@ token_match_expression :: proc(state: ^Token_Matcher_State, scope: ^Scope, build
 	
 	token_rewrite_macros(state, scope, builder)
 	token_rewrite_expression(state, scope, builder, token_rewrite_statement_if)
+	token_rewrite_expression(state, scope, builder, token_rewrite_definitions)
+	token_rewrite_expression(state, scope, builder, token_rewrite_set_array_item)
 	
 	token_rewrite_expression(state, scope, builder, token_rewrite_functions)
 	token_rewrite_expression(state, scope, builder, token_rewrite_negative_literal)
 	token_rewrite_expression(state, scope, builder, token_rewrite_function_calls)
+	token_rewrite_expression(state, scope, builder, token_rewrite_pointer_to)
 	token_rewrite_expression(state, scope, builder, token_rewrite_plus)
 	token_rewrite_expression(state, scope, builder, token_rewrite_less_than)
 	token_rewrite_expression(state, scope, builder, token_rewrite_greater_than)
-	token_rewrite_expression(state, scope, builder, token_rewrite_label)
 	
 	switch len(state.tokens)
 	{
@@ -1305,7 +1401,6 @@ token_match_expression :: proc(state: ^Token_Matcher_State, scope: ^Scope, build
 			// Statement handling
 			token_rewrite_expression(state, scope, builder, token_rewrite_definition_and_assignment_statements)
 			token_rewrite_expression(state, scope, builder, token_rewrite_assignments)
-			token_rewrite_expression(state, scope, builder, token_rewrite_definitions)
 			token_rewrite_expression(state, scope, builder, token_rewrite_explicit_return)
 			token_rewrite_expression(state, scope, builder, token_rewrite_goto)
 			token_rewrite_expression(state, scope, builder, token_rewrite_constant_definitions)
