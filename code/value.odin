@@ -12,6 +12,7 @@ Operand_Type :: enum
 	Immediate_32,
 	Immediate_64,
 	Memory_Indirect,
+	Sib,
 	RIP_Relative,
 	RIP_Relative_Import,
 	Label_32,
@@ -20,6 +21,13 @@ Operand_Type :: enum
 Operand_Memory_Indirect :: struct
 {
 	reg:          Register,
+	displacement: i32,
+}
+Operand_Sib :: struct
+{
+	scale:        u8,
+	index:        Register,
+	base:         Register,
 	displacement: i32,
 }
 
@@ -69,6 +77,7 @@ Operand :: struct
 		imm64:              i64,
 		label32:            ^Label,
 		indirect:           Operand_Memory_Indirect,
+		sib:                Operand_Sib,
 		rip_offset_in_data: int,
 		import_:            Operand_RIP_Relative_Import,
 	},
@@ -259,7 +268,7 @@ print_operand :: proc(operand: ^Operand)
 		{
 			fmt.printf("imm64(0x%016x)", operand.imm64)
 		}
-		case .Memory_Indirect:
+		case .Memory_Indirect, .Sib:
 		{
 			bits := operand.byte_size * 8
 			fmt.printf("m%v", bits)
@@ -492,7 +501,8 @@ operand_immediate_as_i64 :: proc(operand: ^Operand) -> i64
 operand_is_memory :: proc(operand: ^Operand) -> bool
 {
 	return (operand.type == .Memory_Indirect ||
-	        operand.type == .RIP_Relative)
+	        operand.type == .RIP_Relative ||
+	        operand.type == .Sib)
 }
 
 operand_is_immediate :: proc(operand: ^Operand) -> bool

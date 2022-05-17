@@ -1115,36 +1115,65 @@ token_rewrite_set_array_item :: proc(state: ^Token_Matcher_State, scope: ^Scope,
 	
 	args := token_match_call_arguments(args_token, scope, builder)
 	assert(len(args) == 3, "set_array_item takes exactly 3 arguments")
-	// TODO check for array type
 	array       := args[0]
 	index_value := args[1]
 	value       := args[2]
 	
-	item_descriptor := array.descriptor.pointer_to.array.item
+	assert(array.descriptor.type == .Fixed_Size_Array, "Wrong descriptor type in set_array_item")
+	assert(array.operand.type == .Memory_Indirect, "Wrong operand type in set_array_item")
+	
+	item_descriptor := array.descriptor.array.item
 	item_byte_size := descriptor_byte_size(item_descriptor)
 	
-	reg_a := value_register_for_descriptor(.A, array.descriptor)
-	move_value(builder, reg_a, array)
-	
-	// FIXME allow bigger than byte
-	assert(index_value.operand.type == .Immediate_8, "Array index was not Immediate_8")
-	// assert(operand_is_immediate(&index_value.operand), "Array size did not have an immediate operand")
-	index := index_value.operand.imm8
-	
-	target_value := new_clone(Value \
+	if false && operand_is_immediate(&index_value.operand)
 	{
-		descriptor = item_descriptor,
-		operand =
+		index := i32(operand_immediate_as_i64(&index_value.operand))
+		
+		target_value := new_clone(Value \
 		{
-			type      = .Memory_Indirect,
-			byte_size = item_byte_size,
-			data      = {indirect = {
-				reg          = rax.reg,
-				displacement = i32(index) * item_byte_size,
-			}},
-		},
-	})
-	move_value(builder, target_value, value)
+			descriptor = item_descriptor,
+			operand =
+			{
+				type      = .Memory_Indirect,
+				byte_size = item_byte_size,
+				data      = {indirect = {
+					reg          = array.operand.indirect.reg,
+					displacement = array.operand.indirect.displacement + i32(index) * item_byte_size,
+				}},
+			},
+		})
+		
+		move_value(builder, target_value, value)
+	}
+	else if item_byte_size == 1 || item_byte_size == 2 || item_byte_size == 4 || item_byte_size == 8
+	{
+		scale := SIB_Scale_1
+		if      item_byte_size == 2 do scale = SIB_Scale_2
+		else if item_byte_size == 4 do scale = SIB_Scale_4
+		else if item_byte_size == 8 do scale = SIB_Scale_8
+		index_value_in_register := ensure_register(builder, index_value, .R10)
+		target_value := new_clone(Value \
+		{
+			descriptor = item_descriptor,
+			operand =
+			{
+				type      = .Sib,
+				byte_size = item_byte_size,
+				data      = {sib = {
+					scale        = scale,
+					index        = index_value_in_register.operand.reg,
+					base         = array.operand.indirect.reg,
+					displacement = array.operand.indirect.displacement,
+				}},
+			},
+		})
+		
+		move_value(builder, target_value, value)
+	}
+	else
+	{
+		assert(false, "Not implemented")
+	}
 	
 	token_replace_tokens_in_state(state, 2)
 	return true
@@ -1162,21 +1191,16 @@ token_match_label :: proc(state: ^Token_Matcher_State, scope: ^Scope, builder: ^
 token_match_fixed_array_type :: proc(state: ^Token_Matcher_State, scope: ^Scope, builder: ^Function_Builder) -> ^Descriptor
 {
 	peek_index := 0
-	type          := Token_Match(state, &peek_index, &Token{type = .Id});     if type          == nil do return nil
-	square_braces := Token_Match(state, &peek_index, &Token{type = .Square}); if square_braces == nil do return nil
+	type         := Token_Match(state, &peek_index, &Token{type = .Id});     if type         == nil do return nil
+	square_brace := Token_Match(state, &peek_index, &Token{type = .Square}); if square_brace == nil do return nil
 	
 	descriptor := scope_lookup_type(scope, type.source)
 	
-	// FIXME allow any constant expression here
-	assert(len(square_braces.children) == 1, "More than one token found in array size declaration")
-	size_token := square_braces.children[0]
-	assert(size_token.type == .Integer, "Array size was not integer")
-	integer := token_force_value(size_token, scope, builder)
-	
-	// FIXME allow bigger than byte
-	assert(integer.operand.type == .Immediate_8, "Array size was not Immediate_8")
-	// assert(operand_is_immediate(&integer.operand), "Array size did not have an immediate operand")
-	size := integer.operand.imm8
+	size_state: Token_Matcher_State = {tokens = &square_brace.children}
+	size_value := token_match_expression(&size_state, scope, builder)
+	assert(size_value.descriptor.type == .Integer, "Array size did not evaluate to an integer")
+	assert(operand_is_immediate(&size_value.operand), "Array size did not evaluate to an immediate")
+	length := i32(operand_immediate_as_i64(&size_value.operand))
 	
 	// TODO extract into a helper
 	array_descriptor := new_clone(Descriptor \
@@ -1185,7 +1209,7 @@ token_match_fixed_array_type :: proc(state: ^Token_Matcher_State, scope: ^Scope,
 		data = {array =
 		{
 			item = descriptor,
-			length = i32(size),
+			length = length,
 		}},
 	})
 	return array_descriptor

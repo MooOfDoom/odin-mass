@@ -39,6 +39,23 @@ ensure_register_or_memory :: proc(builder: ^Function_Builder, value: ^Value) -> 
 	return value
 }
 
+ensure_register :: proc(builder: ^Function_Builder, value: ^Value, reg: Register) -> ^Value
+{
+	assert(value.operand.type != .None, "Expected valid operand type")
+	if value.operand.type != .Register
+	{
+		result := value_register_for_descriptor(reg, value.descriptor)
+		// NOTE(Lothar): Need to zero out the high bits because we only move the index_value into R10 in ensure register
+		// but SIB uses the whole thing!
+		// TODO(Lothar): Figure out a better way to go about it
+		full_reg := Operand{type = .Register, byte_size = 8, data = {reg = reg}}
+		push_instruction(builder, {xor, {full_reg, full_reg, {}}, nil, #location()})
+		move_value(builder, result, value)
+		return result
+	}
+	return value
+}
+
 move_value :: proc(builder: ^Function_Builder, target: ^Value, source: ^Value, loc := #caller_location)
 {
 	// TODO figure out more type checking
@@ -112,8 +129,8 @@ move_value :: proc(builder: ^Function_Builder, target: ^Value, source: ^Value, l
 	
 	if ((source.operand.type == .Immediate_64 &&
 	     target.operand.type != .Register) ||
-	    (target.operand.type == .Memory_Indirect &&
-	     source.operand.type == .Memory_Indirect))
+	    (operand_is_memory(&target.operand) &&
+	     operand_is_memory(&source.operand)))
 	{
 		reg_a := value_register_for_descriptor(.A, target.descriptor)
 		// TODO Can be a problem if RAX is already used as temp

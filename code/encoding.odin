@@ -2,6 +2,8 @@ package main
 
 import "core:fmt"
 
+R_M_SIB :u8: 0b0100
+
 SIB_Scale_1 :u8: 0b00
 SIB_Scale_2 :u8: 0b01
 SIB_Scale_4 :u8: 0b10
@@ -83,6 +85,14 @@ encode_instruction :: proc(buffer: ^Buffer, builder: ^Function_Builder, instruct
 				continue
 			}
 			if operand.type == .Memory_Indirect && operand_encoding.type == .Memory
+			{
+				continue
+			}
+			if operand.type == .Sib && operand_encoding.type == .Memory
+			{
+				continue
+			}
+			if operand.type == .Sib && operand_encoding.type == .Register_Memory
 			{
 				continue
 			}
@@ -173,17 +183,46 @@ encode_instruction :: proc(buffer: ^Buffer, builder: ^Function_Builder, instruct
 				}
 				else
 				{
-					assert(operand.type == .Memory_Indirect)
+					// TODO use smaller displacement if we can
 					mod = MOD_Displacement_i32
-					r_m = u8(operand.indirect.reg)
-					if r_m == u8(rsp.reg)
+					if operand.type == .Memory_Indirect
 					{
-						encoding_stack_operand = true
+						// TODO check if we need to add REX_X here
+						if operand.indirect.reg == rsp.reg
+						{
+							r_m = R_M_SIB
+							encoding_stack_operand = true
+							needs_sib = true
+							sib_byte = ((SIB_Scale_1 << 6) |
+							            (r_m         << 3) |
+							            (r_m         << 0))
+						}
+						else
+						{
+							r_m = u8(operand.indirect.reg)
+						}
+					}
+					else if operand.type == .Sib
+					{
 						needs_sib = true
-						// FIXME support proper SIB for non-rsp registers
-						sib_byte = ((SIB_Scale_1 << 6) |
-						            (r_m << 3) |
-						            (r_m))
+						r_m = R_M_SIB
+						
+						if u8(operand.sib.index) & 0b1000 != 0
+						{
+							rex_byte |= REX_X
+						}
+						// TODO reconsider how stack offsets are handled
+						if operand.sib.base == rsp.reg
+						{
+							encoding_stack_operand = true
+						}
+						sib_byte = (((u8(operand.sib.scale) & 0b11)  << 6) |
+						            ((u8(operand.sib.index) & 0b111) << 3) |
+						            ((u8(operand.sib.base)  & 0b111) << 0))
+					}
+					else
+					{
+						assert(false, "Unsupported operand type")
 					}
 				}
 			}
@@ -264,9 +303,11 @@ encode_instruction :: proc(buffer: ^Buffer, builder: ^Function_Builder, instruct
 					
 					buffer_append(buffer, displacement)
 				}
-				else if operand.type == .Memory_Indirect
+				else if operand.type == .Memory_Indirect || operand.type == .Sib
 				{
-					displacement := operand.indirect.displacement
+					displacement := (operand.type == .Memory_Indirect ?
+					                 operand.indirect.displacement :
+					                 operand.sib.displacement)
 					
 					if encoding_stack_operand
 					{
