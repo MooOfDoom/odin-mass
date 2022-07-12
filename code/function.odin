@@ -449,9 +449,15 @@ multiply :: proc(builder: ^Function_Builder, x: ^Value, y: ^Value, loc := #calle
 	return temp
 }
 
-divide :: proc(builder: ^Function_Builder, a: ^Value, b: ^Value, loc := #caller_location) -> ^Value
+Divide_Operation :: enum
 {
-	assert(same_value_type(a, b), "Types match in divide")
+	Divide,
+	Remainder,
+}
+
+divide_or_remainder :: proc(builder: ^Function_Builder, operation: Divide_Operation, a: ^Value, b: ^Value, loc := #caller_location) -> ^Value
+{
+	assert(same_value_type_or_can_implicitly_move_cast(a, b), "Types match in divide")
 	assert(a.descriptor.type == .Integer, "Divide only works with integers")
 	
 	// TODO type check values
@@ -472,14 +478,16 @@ divide :: proc(builder: ^Function_Builder, a: ^Value, b: ^Value, loc := #caller_
 	reg_rdx := value_register_for_descriptor(.D, &descriptor_i64)
 	move_value(builder, rdx_temp, reg_rdx)
 	
-	reg_a := value_register_for_descriptor(.A, a.descriptor)
-	move_value(builder, reg_a, a)
+	larger_descriptor := descriptor_byte_size(a.descriptor) > descriptor_byte_size(b.descriptor) ? a.descriptor : b.descriptor
 	
 	// TODO deal with signed / unsigned
-	divisor := reserve_stack(builder, a.descriptor)
+	divisor := reserve_stack(builder, larger_descriptor)
 	move_value(builder, divisor, b)
 	
-	switch descriptor_byte_size(a.descriptor)
+	reg_a := value_register_for_descriptor(.A, larger_descriptor)
+	move_value(builder, reg_a, a)
+	
+	switch descriptor_byte_size(larger_descriptor)
 	{
 		case 8:
 		{
@@ -500,14 +508,30 @@ divide :: proc(builder: ^Function_Builder, a: ^Value, b: ^Value, loc := #caller_
 	}
 	push_instruction(builder, {idiv, {divisor.operand, {}, {}}, nil, loc})
 	
-	// TODO correctly size the temporary value
-	temp := reserve_stack(builder, a.descriptor)
-	move_value(builder, temp, reg_a)
+	result := reserve_stack(builder, larger_descriptor)
+	if operation == .Divide
+	{
+		move_value(builder, result, reg_a)
+	}
+	else
+	{
+		move_value(builder, result, value_register_for_descriptor(.D, larger_descriptor))
+	}
 	
 	// Restore RDX
 	move_value(builder, reg_rdx, rdx_temp)
 	
-	return temp
+	return result
+}
+
+divide :: proc(builder: ^Function_Builder, a: ^Value, b: ^Value, loc := #caller_location) -> ^Value
+{
+	return divide_or_remainder(builder, .Divide, a, b, loc)
+}
+
+remainder :: proc(builder: ^Function_Builder, a: ^Value, b: ^Value, loc := #caller_location) -> ^Value
+{
+	return divide_or_remainder(builder, .Remainder, a, b, loc)
 }
 
 Compare :: enum
@@ -997,6 +1021,13 @@ Divide :: proc(a: ^Value, b: ^Value, loc := #caller_location) -> ^Value
 	builder := get_builder_from_context()
 	
 	return divide(builder, a, b, loc)
+}
+
+Remainder :: proc(a: ^Value, b: ^Value, loc := #caller_location) -> ^Value
+{
+	builder := get_builder_from_context()
+	
+	return remainder(builder, a, b, loc)
 }
 
 SizeOfDescriptor :: proc(descriptor: ^Descriptor) -> ^Value

@@ -1007,8 +1007,8 @@ token_rewrite_constant_definitions :: proc(state: ^Token_Matcher_State, scope: ^
 
 token_parse_block :: proc(block: ^Token, scope: ^Scope, builder: ^Function_Builder) -> ^Value
 {
-	// TODO push an extra scope
 	assert(block.type == .Curly, "Block was not inside curly braces")
+	block_scope := scope_make(scope)
 	block_result: ^Value
 	if len(block.children) != 0
 	{
@@ -1016,7 +1016,7 @@ token_parse_block :: proc(block: ^Token, scope: ^Scope, builder: ^Function_Build
 		
 		for state in &block_statements
 		{
-			block_result = token_match_expression(&state, scope, builder)
+			block_result = token_match_expression(&state, block_scope, builder)
 		}
 	}
 	
@@ -1125,7 +1125,7 @@ token_rewrite_set_array_item :: proc(state: ^Token_Matcher_State, scope: ^Scope,
 	item_descriptor := array.descriptor.array.item
 	item_byte_size := descriptor_byte_size(item_descriptor)
 	
-	if false && operand_is_immediate(&index_value.operand)
+	if operand_is_immediate(&index_value.operand)
 	{
 		index := i32(operand_immediate_as_i64(&index_value.operand))
 		
@@ -1176,6 +1176,47 @@ token_rewrite_set_array_item :: proc(state: ^Token_Matcher_State, scope: ^Scope,
 	}
 	
 	token_replace_tokens_in_state(state, 2)
+	return true
+}
+
+token_rewrite_cast :: proc(state: ^Token_Matcher_State, scope: ^Scope, builder: ^Function_Builder) -> bool
+{
+	peek_index := 0
+	id         := Token_Match(state, &peek_index, &Token{type = .Id, source = "cast"}); if id         == nil do return false
+	args_token := Token_Match(state, &peek_index, &Token{type = .Paren});               if args_token == nil do return false
+	
+	args := token_match_call_arguments(args_token, scope, builder)
+	assert(len(args) == 2, "cast takes exactly 2 arguments")
+	type  := args[0]
+	value := args[1]
+	assert(type.descriptor.type == .Type, "Wrong descriptor type in cast")
+	
+	cast_to_descriptor := type.descriptor.type_descriptor
+	assert(cast_to_descriptor.type == .Integer, "Non-integer type in cast not supported")
+	assert(value.descriptor.type == cast_to_descriptor.type, "Value cannot be cast to target type")
+	
+	cast_to_byte_size := descriptor_byte_size(cast_to_descriptor)
+	original_byte_size := descriptor_byte_size(value.descriptor)
+	result := value
+	if cast_to_byte_size != original_byte_size
+	{
+		if cast_to_byte_size < original_byte_size
+		{
+			result = new_clone(Value \
+			{
+				descriptor = cast_to_descriptor,
+				operand    = value.operand,
+			})
+			result.operand.byte_size = cast_to_byte_size
+		}
+		else if cast_to_byte_size > original_byte_size
+		{
+			result := reserve_stack(builder, cast_to_descriptor)
+			move_value(builder, result, value)
+		}
+	}
+	
+	token_replace_tokens_in_state(state, 2, token_value_make(args_token, result))
 	return true
 }
 
@@ -1355,6 +1396,34 @@ token_rewrite_plus :: proc(state: ^Token_Matcher_State, scope: ^Scope, builder: 
 	return true
 }
 
+token_rewrite_divide :: proc(state: ^Token_Matcher_State, scope: ^Scope, builder: ^Function_Builder) -> bool
+{
+	peek_index := 0
+	lhs       := Token_Match(state, &peek_index, &Token{});     if lhs       == nil do return false
+	div_token := Token_Match_Operator(state, &peek_index, "/"); if div_token == nil do return false
+	rhs       := Token_Match(state, &peek_index, &Token{});     if rhs       == nil do return false
+	
+	value := divide(builder,
+	              token_force_value(lhs, scope, builder),
+	              token_force_value(rhs, scope, builder))
+	token_replace_tokens_in_state(state, 3, token_value_make(div_token, value, lhs, div_token, rhs))
+	return true
+}
+
+token_rewrite_remainder :: proc(state: ^Token_Matcher_State, scope: ^Scope, builder: ^Function_Builder) -> bool
+{
+	peek_index := 0
+	lhs       := Token_Match(state, &peek_index, &Token{});     if lhs       == nil do return false
+	mod_token := Token_Match_Operator(state, &peek_index, "%"); if mod_token == nil do return false
+	rhs       := Token_Match(state, &peek_index, &Token{});     if rhs       == nil do return false
+	
+	value := remainder(builder,
+	              token_force_value(lhs, scope, builder),
+	              token_force_value(rhs, scope, builder))
+	token_replace_tokens_in_state(state, 3, token_value_make(mod_token, value, lhs, mod_token, rhs))
+	return true
+}
+
 token_rewrite_less_than :: proc(state: ^Token_Matcher_State, scope: ^Scope, builder: ^Function_Builder) -> bool
 {
 	peek_index := 0
@@ -1407,11 +1476,15 @@ token_match_expression :: proc(state: ^Token_Matcher_State, scope: ^Scope, build
 	token_rewrite_expression(state, scope, builder, token_rewrite_statement_if)
 	token_rewrite_expression(state, scope, builder, token_rewrite_definitions)
 	token_rewrite_expression(state, scope, builder, token_rewrite_set_array_item)
+	token_rewrite_expression(state, scope, builder, token_rewrite_cast)
 	
 	token_rewrite_expression(state, scope, builder, token_rewrite_functions)
 	token_rewrite_expression(state, scope, builder, token_rewrite_negative_literal)
 	token_rewrite_expression(state, scope, builder, token_rewrite_function_calls)
 	token_rewrite_expression(state, scope, builder, token_rewrite_pointer_to)
+	token_rewrite_expression(state, scope, builder, token_rewrite_divide)
+	token_rewrite_expression(state, scope, builder, token_rewrite_remainder)
+	
 	token_rewrite_expression(state, scope, builder, token_rewrite_plus)
 	token_rewrite_expression(state, scope, builder, token_rewrite_less_than)
 	token_rewrite_expression(state, scope, builder, token_rewrite_greater_than)
