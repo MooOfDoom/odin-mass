@@ -1053,6 +1053,22 @@ main :: () -> () {
 		check(f(5) == 5)
 		check(f(6) == 8)
 	})
+	
+	it("should be able to encode instructions with implicit A register argument", proc()
+	{
+		check_a := Function()
+		{
+			result := value_register_for_descriptor(.A, &descriptor_i32)
+			Assign(result, value_from_i32(40))
+			push_instruction(get_builder_from_context(), {add, {result.operand, imm32(2), {}}, nil, #location()})
+			Return(result);
+		}
+		End_Function()
+		program_end(&test_program)
+		
+		f := value_as_function(check_a, fn_void_to_i32)
+		check(f() == 42);
+	})
 }
 
 puts :: proc "c" (str: [^]byte)

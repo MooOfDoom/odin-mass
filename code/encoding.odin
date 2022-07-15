@@ -56,6 +56,12 @@ encode_instruction :: proc(buffer: ^Buffer, builder: ^Function_Builder, instruct
 			{
 				continue
 			}
+			if (operand.type          == .Register &&
+			    operand.reg           == .A        &&
+			    operand_encoding.type == .Register)
+			{
+				continue
+			}
 			if operand.type == .Register && operand_encoding.type == .Register
 			{
 				continue

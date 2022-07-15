@@ -14,6 +14,7 @@ Operand_Encoding_Type :: enum
 {
 	None,
 	Register,
+	Register_A,
 	Register_Memory,
 	Memory,
 	Immediate,
@@ -68,6 +69,11 @@ Instruction_Extension :: struct
 @(private="file") _r :: Instruction_Extension{.Register, 0}
 @(private="file") plus_r :: Instruction_Extension{.Plus_Register, 0}
 @(private="file") _op_code :: proc(ext: u8) -> Instruction_Extension { return Instruction_Extension{.Op_Code, ext} }
+
+@(private="file") r_al   :: Operand_Encoding{.Register_A, .Size_8}
+@(private="file") r_ax   :: Operand_Encoding{.Register_A, .Size_16}
+@(private="file") r_eax  :: Operand_Encoding{.Register_A, .Size_32}
+@(private="file") r_rax  :: Operand_Encoding{.Register_A, .Size_64}
 
 @(private="file") r_8    :: Operand_Encoding{.Register, .Size_8}
 @(private="file") r_16   :: Operand_Encoding{.Register, .Size_16}
@@ -198,6 +204,11 @@ xor := X64_Mnemonic{name = "xor", encoding_list = xor_encoding_list[:]}
 ////////////////////////////////////////////////////////////////////////////////
 add_encoding_list := [?]Instruction_Encoding \
 {
+	encoding(0x04, none, r_al,  imm_8),
+	encoding(0x05, none, r_ax,  imm_16),
+	encoding(0x05, none, r_eax, imm_32),
+	encoding(0x05, none, r_rax, imm_32),
+	
 	encoding(0x00, _r, r_m8,  r_8),
 	encoding(0x01, _r, r_m16, r_16),
 	encoding(0x01, _r, r_m32, r_32),
