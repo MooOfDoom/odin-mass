@@ -224,14 +224,17 @@ add := X64_Mnemonic{name = "add", encoding_list = add_encoding_list[:]}
 ////////////////////////////////////////////////////////////////////////////////
 sub_encoding_list := [?]Instruction_Encoding \
 {
+	encoding(0x28, _r, r_m8,  r_8),
 	encoding(0x29, _r, r_m16, r_16),
 	encoding(0x29, _r, r_m32, r_32),
 	encoding(0x29, _r, r_m64, r_64),
 	
+	encoding(0x2a, _r, r_8,  r_m8),
 	encoding(0x2b, _r, r_16, r_m16),
 	encoding(0x2b, _r, r_32, r_m32),
 	encoding(0x2b, _r, r_64, r_m64),
 	
+	encoding(0x80, _op_code(5), r_m8, imm_8),
 	encoding(0x81, _op_code(5), r_m16, imm_16),
 	encoding(0x81, _op_code(5), r_m32, imm_32),
 	encoding(0x81, _op_code(5), r_m64, imm_32),
@@ -262,6 +265,7 @@ imul := X64_Mnemonic{name = "imul", encoding_list = imul_encoding_list[:]}
 ////////////////////////////////////////////////////////////////////////////////
 idiv_encoding_list := [?]Instruction_Encoding \
 {
+	encoding(0xf6, _op_code(7), r_m8),
 	encoding(0xf7, _op_code(7), r_m16),
 	encoding(0xf7, _op_code(7), r_m32),
 	encoding(0xf7, _op_code(7), r_m64),

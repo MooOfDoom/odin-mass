@@ -501,6 +501,10 @@ divide_or_remainder :: proc(builder: ^Function_Builder, operation: Divide_Operat
 		{
 			push_instruction(builder, {cwd, {}, nil, loc})
 		}
+		case 1:
+		{
+			// No need to sign extend in D register
+		}
 		case:
 		{
 			assert(false, "Unsupported byte size when dividing")
@@ -515,7 +519,14 @@ divide_or_remainder :: proc(builder: ^Function_Builder, operation: Divide_Operat
 	}
 	else
 	{
-		move_value(builder, result, value_register_for_descriptor(.D, larger_descriptor))
+		if descriptor_byte_size(larger_descriptor) == 1
+		{
+			move_value(builder, result, value_register_for_descriptor(.AH, larger_descriptor))
+		}
+		else
+		{
+			move_value(builder, result, value_register_for_descriptor(.D, larger_descriptor))
+		}
 	}
 	
 	// Restore RDX

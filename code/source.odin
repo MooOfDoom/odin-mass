@@ -1071,7 +1071,7 @@ token_rewrite_explicit_return :: proc(state: ^Token_Matcher_State, scope: ^Scope
 token_rewrite_negative_literal :: proc(state: ^Token_Matcher_State, scope: ^Scope, builder: ^Function_Builder) -> bool
 {
 	peek_index := 0
-	// FIXME distinguish unary and binary minus
+	// FIXME Allow unary minus on any expression
 	minus   := Token_Match_Operator(state, &peek_index, "-");            if minus   == nil do return false
 	integer := Token_Match(state, &peek_index, &Token{type = .Integer}); if integer == nil do return false
 	result := token_force_value(integer, scope, builder)
@@ -1211,7 +1211,7 @@ token_rewrite_cast :: proc(state: ^Token_Matcher_State, scope: ^Scope, builder: 
 		}
 		else if cast_to_byte_size > original_byte_size
 		{
-			result := reserve_stack(builder, cast_to_descriptor)
+			result = reserve_stack(builder, cast_to_descriptor)
 			move_value(builder, result, value)
 		}
 	}
@@ -1396,6 +1396,20 @@ token_rewrite_plus :: proc(state: ^Token_Matcher_State, scope: ^Scope, builder: 
 	return true
 }
 
+token_rewrite_minus :: proc(state: ^Token_Matcher_State, scope: ^Scope, builder: ^Function_Builder) -> bool
+{
+	peek_index := 0
+	lhs         := Token_Match(state, &peek_index, &Token{});     if lhs         == nil do return false
+	minus_token := Token_Match_Operator(state, &peek_index, "-"); if minus_token == nil do return false
+	rhs         := Token_Match(state, &peek_index, &Token{});     if rhs         == nil do return false
+	
+	value := minus(builder,
+	               token_force_value(lhs, scope, builder),
+	               token_force_value(rhs, scope, builder))
+	token_replace_tokens_in_state(state, 3, token_value_make(minus_token, value, lhs, minus_token, rhs))
+	return true
+}
+
 token_rewrite_divide :: proc(state: ^Token_Matcher_State, scope: ^Scope, builder: ^Function_Builder) -> bool
 {
 	peek_index := 0
@@ -1421,6 +1435,20 @@ token_rewrite_remainder :: proc(state: ^Token_Matcher_State, scope: ^Scope, buil
 	              token_force_value(lhs, scope, builder),
 	              token_force_value(rhs, scope, builder))
 	token_replace_tokens_in_state(state, 3, token_value_make(mod_token, value, lhs, mod_token, rhs))
+	return true
+}
+
+token_rewrite_equals :: proc(state: ^Token_Matcher_State, scope: ^Scope, builder: ^Function_Builder) -> bool
+{
+	peek_index := 0
+	lhs      := Token_Match(state, &peek_index, &Token{});      if lhs      == nil do return false
+	eq_token := Token_Match_Operator(state, &peek_index, "=="); if eq_token == nil do return false
+	rhs      := Token_Match(state, &peek_index, &Token{});      if rhs      == nil do return false
+	
+	value := compare(builder, .Equal,
+	                 token_force_value(lhs, scope, builder),
+	                 token_force_value(rhs, scope, builder))
+	token_replace_tokens_in_state(state, 3, token_value_make(eq_token, value, lhs, eq_token, rhs))
 	return true
 }
 
@@ -1486,6 +1514,9 @@ token_match_expression :: proc(state: ^Token_Matcher_State, scope: ^Scope, build
 	token_rewrite_expression(state, scope, builder, token_rewrite_remainder)
 	
 	token_rewrite_expression(state, scope, builder, token_rewrite_plus)
+	token_rewrite_expression(state, scope, builder, token_rewrite_minus)
+	
+	token_rewrite_expression(state, scope, builder, token_rewrite_equals)
 	token_rewrite_expression(state, scope, builder, token_rewrite_less_than)
 	token_rewrite_expression(state, scope, builder, token_rewrite_greater_than)
 	

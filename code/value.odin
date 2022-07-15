@@ -325,23 +325,32 @@ Jit_Program :: struct
 // AL, AX, EAX, RAX
 Register :: enum u8
 {
-	A   = 0b0000,
-	C   = 0b0001,
-	D   = 0b0010,
-	B   = 0b0011,
-	SP  = 0b0100,
-	BP  = 0b0101,
-	SI  = 0b0110,
-	DI  = 0b0111,
+	A       = 0b0000,
+	C       = 0b0001,
+	D       = 0b0010,
+	B       = 0b0011,
 	
-	R8  = 0b1000,
-	R9  = 0b1001,
-	R10 = 0b1010,
-	R11 = 0b1011,
-	R12 = 0b1100,
-	R13 = 0b1101,
-	R14 = 0b1110,
-	R15 = 0b1111,
+	AH      = 0b0100,
+	SP      = 0b0100,
+	R_M_SIB = 0b0100,
+	
+	CH      = 0b0101,
+	BP      = 0b0101,
+	
+	DH      = 0b0110,
+	SI      = 0b0110,
+	
+	BH      = 0b0111,
+	DI      = 0b0111,
+	
+	R8      = 0b1000,
+	R9      = 0b1001,
+	R10     = 0b1010,
+	R11     = 0b1011,
+	R12     = 0b1100,
+	R13     = 0b1101,
+	R14     = 0b1110,
+	R15     = 0b1111,
 }
 
 al := Operand{type = .Register, byte_size = 1, data = {reg = .A}}
