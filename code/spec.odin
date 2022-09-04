@@ -13,74 +13,6 @@ fn_reflect :: proc(builder: ^Function_Builder, descriptor: ^Descriptor) -> ^Valu
 	return result
 }
 
-Struct_Builder_Field :: struct
-{
-	struct_field: Descriptor_Struct_Field,
-	next:         ^Struct_Builder_Field,
-}
-
-Struct_Builder :: struct
-{
-	offset:      i32,
-	field_count: u32,
-	max_size:    i32,
-	field_list:  ^Struct_Builder_Field,
-}
-
-struct_begin :: proc() -> Struct_Builder
-{
-	return Struct_Builder{}
-}
-
-struct_add_field :: proc(builder: ^Struct_Builder, descriptor: ^Descriptor, name: string) -> ^Descriptor_Struct_Field
-{
-	size := descriptor_byte_size(descriptor)
-	builder.max_size = max(builder.max_size, size)
-	builder.offset = align(builder.offset, size)
-	builder_field := new_clone(Struct_Builder_Field \
-	{
-		struct_field =
-		{
-			name       = name,
-			descriptor = descriptor,
-			offset     = builder.offset,
-		},
-		next = builder.field_list,
-	})
-	builder.offset      += size
-	builder.field_count += 1
-	builder.field_list   = builder_field
-	
-	return &builder_field.struct_field
-}
-
-struct_end :: proc(builder: ^Struct_Builder) -> ^Descriptor
-{
-	assert(builder.field_count > 0, "Struct has at least one field")
-	
-	builder.offset = align(builder.offset, builder.max_size)
-	
-	result := new_clone(Descriptor \
-	{
-		type = .Struct,
-		data = {struct_ =
-		{
-			fields = make([]Descriptor_Struct_Field, builder.field_count),
-		}},
-	})
-	fields := result.struct_.fields
-	
-	index := builder.field_count - 1
-	
-	for field := builder.field_list; field != nil; field = field.next
-	{
-		fields[index] = field.struct_field
-		index -= 1
-	}
-	
-	return result
-}
-
 ensure_memory :: proc(value: ^Value) -> ^Value
 {
 	operand := value.operand
@@ -249,10 +181,9 @@ mass_spec :: proc()
 	
 	it("should support returning structs larger than 64 bits on the stack", proc()
 	{
-		struct_builder := struct_begin()
-		struct_add_field(&struct_builder, &descriptor_i64, "x")
-		struct_add_field(&struct_builder, &descriptor_i64, "y")
-		point_struct_descriptor := struct_end(&struct_builder)
+		point_struct_descriptor := descriptor_struct_make()
+		descriptor_struct_add_field(point_struct_descriptor, &descriptor_i64, "x")
+		descriptor_struct_add_field(point_struct_descriptor, &descriptor_i64, "y")
 		
 		return_value: Value =
 		{
@@ -341,10 +272,9 @@ mass_spec :: proc()
 	
 	it("should support reflection on structs", proc()
 	{
-		struct_builder := struct_begin()
-		struct_add_field(&struct_builder, &descriptor_i32, "x")
-		struct_add_field(&struct_builder, &descriptor_i32, "y")
-		point_struct_descriptor := struct_end(&struct_builder)
+		point_struct_descriptor := descriptor_struct_make()
+		descriptor_struct_add_field(point_struct_descriptor, &descriptor_i64, "x")
+		descriptor_struct_add_field(point_struct_descriptor, &descriptor_i64, "y")
 		
 		field_count := Function()
 		{
@@ -377,7 +307,7 @@ mass_spec :: proc()
 			},
 			{
 				name = "Some",
-				fields = some_fields[:],
+				fields = slice_as_dynamic(some_fields[:]),
 			},
 		}
 		
@@ -446,13 +376,11 @@ mass_spec :: proc()
 	
 	it("should say that structs are different if their descriptors are different pointers)", proc()
 	{
-		struct_builder := struct_begin()
-		struct_add_field(&struct_builder, &descriptor_i32, "x")
-		a := struct_end(&struct_builder)
+		a := descriptor_struct_make()
+		descriptor_struct_add_field(a, &descriptor_i64, "x")
 		
-		struct_builder = struct_begin()
-		struct_add_field(&struct_builder, &descriptor_i32, "x")
-		b := struct_end(&struct_builder)
+		b := descriptor_struct_make()
+		descriptor_struct_add_field(b, &descriptor_i64, "x")
 		
 		check(same_type(a, a))
 		check(!same_type(a, b))
@@ -462,13 +390,10 @@ mass_spec :: proc()
 	{
 		// Size :: struct { width: i32, height: i32 }
 		
-		struct_builder := struct_begin()
-		
-		width_field  := struct_add_field(&struct_builder, &descriptor_i32, "width")
-		height_field := struct_add_field(&struct_builder, &descriptor_i32, "height")
-		struct_add_field(&struct_builder, &descriptor_i32, "dummy")
-		
-		size_struct_descriptor := struct_end(&struct_builder)
+		size_struct_descriptor := descriptor_struct_make()
+		descriptor_struct_add_field(size_struct_descriptor, &descriptor_i32, "width")
+		descriptor_struct_add_field(size_struct_descriptor, &descriptor_i32, "height")
+		descriptor_struct_add_field(size_struct_descriptor, &descriptor_i32, "dummy")
 		
 		size_struct_pointer_descriptor := descriptor_pointer_to(size_struct_descriptor)
 		
@@ -484,7 +409,7 @@ mass_spec :: proc()
 		size: struct {width: i32, height: i32, dummy: i32} = {10, 42, 0}
 		result: i32 = value_as_function(area, fn_rawptr_to_i32)(&size)
 		check(result == 420)
-		check(size_of(size) == struct_builder.offset)
+		check(size_of(size) == descriptor_byte_size(size_struct_descriptor))
 	})
 	
 	it("should add 1 to all numbers in an array", proc()

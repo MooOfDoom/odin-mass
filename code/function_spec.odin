@@ -345,6 +345,19 @@ checker :: () -> (s32) { negative 42 }`
 		// value_as_function(fizz_buzz, fn_void_to_void)()
 	})
 	
+	it("should be able to parse struct definitions", proc()
+	{
+		program := &test_program
+		program_import_file(program, "lib\\prelude")
+		program_import_file(program, "fixtures\\struct")
+		
+		main := scope_lookup_force(program.global_scope, "main")
+
+		program_end(program)
+		
+		// value_as_function(main, fn_void_to_void)()
+	})
+	
 	it("should be able to define and use a macro for a while loop", proc()
 	{
 		program := &test_program

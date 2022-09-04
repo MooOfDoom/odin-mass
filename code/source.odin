@@ -991,6 +991,91 @@ token_rewrite_macro_definitions :: proc(state: ^Token_Matcher_State, scope: ^Sco
 	return true
 }
 
+token_match_fixed_array_type :: proc(state: ^Token_Matcher_State, scope: ^Scope, builder: ^Function_Builder) -> ^Descriptor
+{
+	peek_index := 0
+	type         := Token_Match(state, &peek_index, &Token{type = .Id});     if type         == nil do return nil
+	square_brace := Token_Match(state, &peek_index, &Token{type = .Square}); if square_brace == nil do return nil
+	
+	descriptor := scope_lookup_type(scope, type.source)
+	
+	size_state: Token_Matcher_State = {tokens = &square_brace.children}
+	size_value := token_match_expression(&size_state, scope, builder)
+	assert(size_value.descriptor.type == .Integer, "Array size did not evaluate to an integer")
+	assert(operand_is_immediate(&size_value.operand), "Array size did not evaluate to an immediate")
+	length := i32(operand_immediate_as_i64(&size_value.operand))
+	
+	// TODO extract into a helper
+	array_descriptor := new_clone(Descriptor \
+	{
+		type = .Fixed_Size_Array,
+		data = {array =
+		{
+			item = descriptor,
+			length = length,
+		}},
+	})
+	return array_descriptor
+}
+
+token_match_struct_field :: proc(struct_descriptor: ^Descriptor, state: ^Token_Matcher_State, scope: ^Scope, builder: ^Function_Builder) -> bool
+{
+	peek_index := 0
+	name   := Token_Match(state, &peek_index, &Token{type = .Id}); if name   == nil do return false
+	define := Token_Match_Operator(state, &peek_index, ":");       if define == nil do return false
+	
+	rest_slice := state.tokens[state.start_index + peek_index:]
+	rest := slice_as_dynamic(rest_slice)
+	rest_state: Token_Matcher_State = {tokens = &rest}
+	resize(state.tokens, state.start_index)
+	
+	descriptor := token_match_fixed_array_type(&rest_state, scope, builder)
+	if descriptor == nil
+	{
+		assert(len(rest) == 1, fmt.tprintf("Non-array type was not a single token: %v", rest))
+		type := rest[0]
+		assert(type.type == .Id, "Non-array type was not an identifier")
+		descriptor = scope_lookup_type(scope, type.source)
+	}
+	
+	descriptor_struct_add_field(struct_descriptor, descriptor, name.source)
+	
+	return true
+}
+
+token_rewrite_struct_definitions :: proc(state: ^Token_Matcher_State, scope: ^Scope, builder: ^Function_Builder) -> bool
+{
+	peek_index := 0
+	keyword := Token_Match(state, &peek_index, &Token{type = .Id, source = "struct"}); if keyword == nil do return false
+	body    := Token_Match(state, &peek_index, &Token{type = .Curly});                 if body    == nil do return false
+	
+	struct_descriptor := descriptor_struct_make()
+	if len(body.children) != 0
+	{
+		definitions := token_split(&body.children, &Token{type = .Operator, source = ";"})
+		
+		for state in &definitions
+		{
+			token_match_struct_field(struct_descriptor, &state, scope, builder)
+		}
+	}
+	
+	value_descriptor := new_clone(Descriptor \
+	{
+		type = .Type,
+		data = {type_descriptor = struct_descriptor},
+	})
+	result := new_clone(Value \
+	{
+		descriptor = value_descriptor,
+		operand    = {type = .None},
+	})
+	
+	token_replace_tokens_in_state(state, 2, token_value_make(body, result))
+	
+	return true
+}
+
 token_rewrite_constant_definitions :: proc(state: ^Token_Matcher_State, scope: ^Scope, builder: ^Function_Builder) -> bool
 {
 	peek_index := 0
@@ -1229,33 +1314,6 @@ token_match_label :: proc(state: ^Token_Matcher_State, scope: ^Scope, builder: ^
 	return make_label()
 }
 
-token_match_fixed_array_type :: proc(state: ^Token_Matcher_State, scope: ^Scope, builder: ^Function_Builder) -> ^Descriptor
-{
-	peek_index := 0
-	type         := Token_Match(state, &peek_index, &Token{type = .Id});     if type         == nil do return nil
-	square_brace := Token_Match(state, &peek_index, &Token{type = .Square}); if square_brace == nil do return nil
-	
-	descriptor := scope_lookup_type(scope, type.source)
-	
-	size_state: Token_Matcher_State = {tokens = &square_brace.children}
-	size_value := token_match_expression(&size_state, scope, builder)
-	assert(size_value.descriptor.type == .Integer, "Array size did not evaluate to an integer")
-	assert(operand_is_immediate(&size_value.operand), "Array size did not evaluate to an immediate")
-	length := i32(operand_immediate_as_i64(&size_value.operand))
-	
-	// TODO extract into a helper
-	array_descriptor := new_clone(Descriptor \
-	{
-		type = .Fixed_Size_Array,
-		data = {array =
-		{
-			item = descriptor,
-			length = length,
-		}},
-	})
-	return array_descriptor
-}
-
 token_rewrite_definitions :: proc(state: ^Token_Matcher_State, scope: ^Scope, builder: ^Function_Builder) -> bool
 {
 	peek_index := 0
@@ -1263,8 +1321,7 @@ token_rewrite_definitions :: proc(state: ^Token_Matcher_State, scope: ^Scope, bu
 	define := Token_Match_Operator(state, &peek_index, ":");       if define == nil do return false
 	
 	rest_slice := state.tokens[state.start_index + peek_index:]
-	rest := mem.buffer_from_slice(rest_slice)
-	resize(&rest, len(rest_slice))
+	rest := slice_as_dynamic(rest_slice)
 	rest_state: Token_Matcher_State = {tokens = &rest}
 	resize(state.tokens, state.start_index)
 	
@@ -1612,6 +1669,7 @@ token_match_module :: proc(token: ^Token, program: ^Program)
 	state := &Token_Matcher_State{tokens = &token.children}
 	global_builder: Function_Builder = {program = program}
 	
+	token_rewrite_expression(state, program.global_scope, &global_builder, token_rewrite_struct_definitions)
 	token_rewrite_expression(state, program.global_scope, &global_builder, token_rewrite_macro_definitions)
 	token_rewrite_expression(state, program.global_scope, &global_builder, token_rewrite_dll_imports)
 	token_rewrite_expression(state, program.global_scope, &global_builder, token_rewrite_functions)

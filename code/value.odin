@@ -1,7 +1,8 @@
 package main
 
-import "core:intrinsics"
 import "core:fmt"
+import "core:intrinsics"
+import "core:mem"
 import "core:strings"
 
 Operand_Type :: enum
@@ -124,7 +125,7 @@ Descriptor_Struct_Field :: struct
 Descriptor_Struct :: struct
 {
 	name:   string,
-	fields: []Descriptor_Struct_Field,
+	fields: [dynamic]Descriptor_Struct_Field,
 }
 
 Descriptor_Tagged_Union :: struct
@@ -197,7 +198,7 @@ descriptor_struct_reflection: Descriptor =
 	type = .Struct,
 	data = {struct_ =
 	{
-		fields = struct_reflection_fields[:],
+		fields = slice_as_dynamic(struct_reflection_fields[:]),
 	}},
 }
 
@@ -496,6 +497,38 @@ imm_auto :: proc(value: $T) -> Operand
 stack :: proc(offset: i32, byte_size: i32) -> Operand
 {
 	return Operand{type = .Memory_Indirect, byte_size = byte_size, data = {indirect = {reg = .SP, displacement = offset}}}
+}
+
+descriptor_struct_make :: proc() -> ^Descriptor
+{
+	return new_clone(Descriptor \
+	{
+		type = .Struct,
+		data = { struct_ =
+		{
+			fields = make([dynamic]Descriptor_Struct_Field, 0, 16),
+		}},
+	})
+}
+
+descriptor_struct_add_field :: proc(struct_descriptor: ^Descriptor, field_descriptor: ^Descriptor, field_name: string)
+{
+	offset: i32
+	for field in &struct_descriptor.struct_.fields
+	{
+		size := descriptor_byte_size(field.descriptor)
+		offset = align(offset, size)
+		offset += size
+	}
+	
+	size := descriptor_byte_size(field_descriptor)
+	offset = align(offset, size)
+	append(&struct_descriptor.struct_.fields, Descriptor_Struct_Field \
+	{
+		name = field_name,
+		descriptor = field_descriptor,
+		offset = offset,
+	})
 }
 
 operand_immediate_as_i64 :: proc(operand: ^Operand) -> i64

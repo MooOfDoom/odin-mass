@@ -249,3 +249,15 @@ print_buffer :: proc(buffer: []byte)
 	}
 	fmt.printf("%v\n", strings.to_string(sb))
 }
+
+slice_as_dynamic :: proc "contextless" (backing: $T/[]$E) -> [dynamic]E {
+	return transmute([dynamic]E)mem.Raw_Dynamic_Array{
+		data      = raw_data(backing),
+		len       = len(backing),
+		cap       = len(backing),
+		allocator = mem.Allocator{
+			procedure = mem.nil_allocator_proc,
+			data = nil,
+		},
+	}
+}

@@ -9,6 +9,20 @@ import "core:sys/win32"
 TO_BE_PATCHED     :i32: -858993460 // 0xcccccccc
 TO_BE_PATCHED_i64 :i64: -3689348814741910324 // 0xcccccccccccccccc
 
+Struct_Builder_Field :: struct
+{
+	struct_field: Descriptor_Struct_Field,
+	next:         ^Struct_Builder_Field,
+}
+
+Struct_Builder :: struct
+{
+	offset:      i32,
+	field_count: u32,
+	max_size:    i32,
+	field_list:  ^Struct_Builder_Field,
+}
+
 reserve_stack :: proc(builder: ^Function_Builder, descriptor: ^Descriptor) -> ^Value
 {
 	byte_size := descriptor_byte_size(descriptor)
@@ -26,6 +40,60 @@ push_instruction :: proc(builder: ^Function_Builder, instruction: Instruction)
 {
 	append(&builder.instructions, instruction)
 }
+
+// struct_begin :: proc() -> Struct_Builder
+// {
+// 	return Struct_Builder{}
+// }
+
+// struct_add_field :: proc(builder: ^Struct_Builder, descriptor: ^Descriptor, name: string) -> ^Descriptor_Struct_Field
+// {
+// 	size := descriptor_byte_size(descriptor)
+// 	builder.max_size = max(builder.max_size, size)
+// 	builder.offset = align(builder.offset, size)
+// 	builder_field := new_clone(Struct_Builder_Field \
+// 	{
+// 		struct_field =
+// 		{
+// 			name       = name,
+// 			descriptor = descriptor,
+// 			offset     = builder.offset,
+// 		},
+// 		next = builder.field_list,
+// 	})
+// 	builder.offset      += size
+// 	builder.field_count += 1
+// 	builder.field_list   = builder_field
+	
+// 	return &builder_field.struct_field
+// }
+
+// struct_end :: proc(builder: ^Struct_Builder) -> ^Descriptor
+// {
+// 	assert(builder.field_count > 0, "Struct has at least one field")
+	
+// 	builder.offset = align(builder.offset, builder.max_size)
+	
+// 	result := new_clone(Descriptor \
+// 	{
+// 		type = .Struct,
+// 		data = {struct_ =
+// 		{
+// 			fields = make([dynamic]Descriptor_Struct_Field, builder.field_count, builder.field_count),
+// 		}},
+// 	})
+// 	fields := result.struct_.fields
+	
+// 	index := builder.field_count - 1
+	
+// 	for field := builder.field_list; field != nil; field = field.next
+// 	{
+// 		fields[index] = field.struct_field
+// 		index -= 1
+// 	}
+	
+// 	return result
+// }
 
 ensure_register_or_memory :: proc(builder: ^Function_Builder, value: ^Value) -> ^Value
 {
