@@ -351,11 +351,11 @@ checker :: () -> (s32) { negative 42 }`
 		program_import_file(program, "lib\\prelude")
 		program_import_file(program, "fixtures\\struct")
 		
-		main := scope_lookup_force(program.global_scope, "main")
+		checker := scope_lookup_force(program.global_scope, "check")
 
 		program_end(program)
 		
-		// value_as_function(main, fn_void_to_void)()
+		check(value_as_function(checker, fn_void_to_i32)() == 42)
 	})
 	
 	it("should be able to define and use a macro for a while loop", proc()

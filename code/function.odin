@@ -41,60 +41,6 @@ push_instruction :: proc(builder: ^Function_Builder, instruction: Instruction)
 	append(&builder.instructions, instruction)
 }
 
-// struct_begin :: proc() -> Struct_Builder
-// {
-// 	return Struct_Builder{}
-// }
-
-// struct_add_field :: proc(builder: ^Struct_Builder, descriptor: ^Descriptor, name: string) -> ^Descriptor_Struct_Field
-// {
-// 	size := descriptor_byte_size(descriptor)
-// 	builder.max_size = max(builder.max_size, size)
-// 	builder.offset = align(builder.offset, size)
-// 	builder_field := new_clone(Struct_Builder_Field \
-// 	{
-// 		struct_field =
-// 		{
-// 			name       = name,
-// 			descriptor = descriptor,
-// 			offset     = builder.offset,
-// 		},
-// 		next = builder.field_list,
-// 	})
-// 	builder.offset      += size
-// 	builder.field_count += 1
-// 	builder.field_list   = builder_field
-	
-// 	return &builder_field.struct_field
-// }
-
-// struct_end :: proc(builder: ^Struct_Builder) -> ^Descriptor
-// {
-// 	assert(builder.field_count > 0, "Struct has at least one field")
-	
-// 	builder.offset = align(builder.offset, builder.max_size)
-	
-// 	result := new_clone(Descriptor \
-// 	{
-// 		type = .Struct,
-// 		data = {struct_ =
-// 		{
-// 			fields = make([dynamic]Descriptor_Struct_Field, builder.field_count, builder.field_count),
-// 		}},
-// 	})
-// 	fields := result.struct_.fields
-	
-// 	index := builder.field_count - 1
-	
-// 	for field := builder.field_list; field != nil; field = field.next
-// 	{
-// 		fields[index] = field.struct_field
-// 		index -= 1
-// 	}
-	
-// 	return result
-// }
-
 ensure_register_or_memory :: proc(builder: ^Function_Builder, value: ^Value) -> ^Value
 {
 	assert(value.operand.type != .None, "Expected valid operand type")
@@ -933,6 +879,54 @@ make_or :: proc(builder: ^Function_Builder, a: ^Value, b: ^Value, loc := #caller
 	label_(builder, label)
 	
 	return result
+}
+
+ensure_memory :: proc(value: ^Value) -> ^Value
+{
+	operand := value.operand
+	if operand.type == .Memory_Indirect do return value
+	if value.descriptor.type != .Pointer do assert(false, "Not implemented")
+	if value.operand.type != .Register do assert(false, "Not implemented")
+	return new_clone(Value \
+	{
+		descriptor = value.descriptor.pointer_to,
+		operand =
+		{
+			type = .Memory_Indirect,
+			data = {indirect =
+			{
+				reg          = value.operand.reg,
+				displacement = 0,
+			}},
+		},
+	})
+}
+
+struct_get_field :: proc(struct_value: ^Value, name: string) -> ^Value
+{
+	struct_value := ensure_memory(struct_value)
+	descriptor := struct_value.descriptor
+	assert(descriptor.type == .Struct, "Can only get fields of structs")
+	for field in &descriptor.struct_.fields
+	{
+		if field.name == name
+		{
+			operand := struct_value.operand
+			// FIXME support more operands
+			assert(operand.type == .Memory_Indirect)
+			operand.indirect.displacement += field.offset
+			operand.byte_size = descriptor_byte_size(field.descriptor)
+			result := new_clone(Value \
+			{
+				descriptor = field.descriptor,
+				operand    = operand,
+			})
+			return result
+		}
+	}
+	
+	assert(false, "Could not find a field with specified name")
+	return nil
 }
 
 //

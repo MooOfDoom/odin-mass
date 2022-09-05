@@ -1,10 +1,13 @@
-ExitProcess  :: (status : s32) -> (s64)    import("kernel32.dll", "ExitProcess")
+ExitProcess :: (status : s32) -> (s64) import("kernel32.dll", "ExitProcess")
 
 Point :: struct {
 	x : s32;
 	y : s32;
 }
 
-main :: () -> () {
-	ExitProcess(0)
+check :: () -> (s32) {
+	p : Point;
+	p.x = 20;
+	p.y = 22;
+	return p.x + p.y
 }

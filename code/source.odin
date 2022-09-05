@@ -117,7 +117,7 @@ scope_lookup_force :: proc(scope: ^Scope, name: string, builder: ^Function_Build
 		if entry != nil do break
 		scope = scope.parent
 	}
-	assert(entry != nil, fmt.tprintf("Name %q not found in scope", name), loc)
+	assert(entry != nil, fmt.tprintf("Could not resolve identifier: %q", name), loc)
 	result: ^Value
 	switch entry.type
 	{
@@ -212,7 +212,7 @@ code_point_is_operator :: proc(code_point: rune) -> bool
 	{
 		case '+', '-', '=', '!', '@', '%', '^', '&',
 		     '*', '/', ':', ';', ',', '?', '|', '~',
-		     '>', '<':
+		     '.', '>', '<':
 		{
 			return true
 		}
@@ -572,12 +572,12 @@ token_split :: proc(tokens: ^[dynamic]^Token, separator: ^Token) -> [dynamic]Tok
 	return result
 }
 
-scope_lookup_type :: proc(scope: ^Scope, type_name: string) -> ^Descriptor
+scope_lookup_type :: proc(scope: ^Scope, type_name: string, builder: ^Function_Builder, loc := #caller_location) -> ^Descriptor
 {
-	value := scope_lookup_force(scope, type_name)
-	assert(value.descriptor.type == .Type, "Type was not actually a type")
+	value := scope_lookup_force(scope, type_name, builder, loc)
+	assert(value.descriptor.type == .Type, "Type was not actually a type", loc)
 	descriptor := value.descriptor.type_descriptor
-	assert(descriptor != nil, "Type somehow did not have a type_descriptor!")
+	assert(descriptor != nil, "Type somehow did not have a type_descriptor!", loc)
 	return descriptor
 }
 
@@ -615,14 +615,14 @@ Token_Match_End :: proc(state: ^Token_Matcher_State, peek_index: int)
 	assert(peek_index == len(state.tokens), "Did not match the right number of tokens")
 }
 
-token_force_type :: proc(scope: ^Scope, token: ^Token) -> ^Descriptor
+token_force_type :: proc(scope: ^Scope, token: ^Token, builder: ^Function_Builder) -> ^Descriptor
 {
 	descriptor: ^Descriptor
 	#partial switch token.type
 	{
 		case .Id:
 		{
-			descriptor = scope_lookup_type(scope, token.source)
+			descriptor = scope_lookup_type(scope, token.source, builder)
 		}
 		case .Square:
 		{
@@ -631,7 +631,7 @@ token_force_type :: proc(scope: ^Scope, token: ^Token) -> ^Descriptor
 			descriptor = new_clone(Descriptor \
 			{
 				type = .Pointer,
-				data = {pointer_to = scope_lookup_type(scope, child.source)},
+				data = {pointer_to = scope_lookup_type(scope, child.source, builder)},
 			})
 		}
 		case:
@@ -803,7 +803,7 @@ token_match_argument :: proc(state: ^Token_Matcher_State, scope: ^Scope, builder
 	return new_clone(Token_Match_Arg \
 	{
 		arg_name        = arg_id.source,
-		type_descriptor = token_force_type(scope, arg_type),
+		type_descriptor = token_force_type(scope, arg_type, builder),
 	})
 }
 
@@ -839,17 +839,17 @@ token_force_value :: proc(token: ^Token, scope: ^Scope, builder: ^Function_Build
 	}
 	else if token.type == .Lazy_Function_Definition
 	{
-		return token_force_lazy_function_definition(&token.lazy_function_definition)
+		return token_force_lazy_function_definition(&token.lazy_function_definition, builder)
 	}
 	else if token.type == .Paren
 	{
-		assert(builder != nil, "Parens forced to value without builder")
+		assert(builder != nil, "Parens forced to value without builder", loc)
 		state: Token_Matcher_State = {tokens = &token.children}
 		return token_match_expression(&state, scope, builder)
 	}
 	else if token.type == .Curly
 	{
-		assert(builder != nil, "Curly forced to value without builder")
+		assert(builder != nil, "Curly forced to value without builder", loc)
 		return token_parse_block(token, scope, builder)
 	}
 	else
@@ -903,10 +903,10 @@ token_replace_tokens_in_state :: proc(state: ^Token_Matcher_State, length: int, 
 
 token_rewrite_functions_pattern_callback :: proc(match: [dynamic]^Token, scope: ^Scope, builder: ^Function_Builder) -> [dynamic]^Token
 {
-	args          := match[0]
-	arrow         := match[1]
-	return_types  := match[2]
-	body          := match[3]
+	args         := match[0]
+	arrow        := match[1]
+	return_types := match[2]
+	body         := match[3]
 	
 	result_token := new_clone(Token \
 	{
@@ -997,7 +997,7 @@ token_match_fixed_array_type :: proc(state: ^Token_Matcher_State, scope: ^Scope,
 	type         := Token_Match(state, &peek_index, &Token{type = .Id});     if type         == nil do return nil
 	square_brace := Token_Match(state, &peek_index, &Token{type = .Square}); if square_brace == nil do return nil
 	
-	descriptor := scope_lookup_type(scope, type.source)
+	descriptor := scope_lookup_type(scope, type.source, builder)
 	
 	size_state: Token_Matcher_State = {tokens = &square_brace.children}
 	size_value := token_match_expression(&size_state, scope, builder)
@@ -1035,7 +1035,7 @@ token_match_struct_field :: proc(struct_descriptor: ^Descriptor, state: ^Token_M
 		assert(len(rest) == 1, fmt.tprintf("Non-array type was not a single token: %v", rest))
 		type := rest[0]
 		assert(type.type == .Id, "Non-array type was not an identifier")
-		descriptor = scope_lookup_type(scope, type.source)
+		descriptor = scope_lookup_type(scope, type.source, builder)
 	}
 	
 	descriptor_struct_add_field(struct_descriptor, descriptor, name.source)
@@ -1344,7 +1344,7 @@ token_rewrite_definitions :: proc(state: ^Token_Matcher_State, scope: ^Scope, bu
 		assert(len(rest) == 1, fmt.tprintf("Non-array type was not a single token: %v", rest))
 		type := rest[0]
 		assert(type.type == .Id, "Non-array type was not an identifier")
-		descriptor = scope_lookup_type(scope, type.source)
+		descriptor = scope_lookup_type(scope, type.source, builder)
 	}
 	
 	value := reserve_stack(builder, descriptor)
@@ -1371,20 +1371,54 @@ token_rewrite_definition_and_assignment_statements :: proc(state: ^Token_Matcher
 	return true
 }
 
-token_rewrite_assignments :: proc(state: ^Token_Matcher_State, scope: ^Scope, builder: ^Function_Builder) -> bool
+token_rewrite_struct_field :: proc(state: ^Token_Matcher_State, scope: ^Scope, builder: ^Function_Builder) -> bool
 {
 	peek_index := 0
-	name        := Token_Match(state, &peek_index, &Token{type = .Id}); if name        == nil do return false
-	define      := Token_Match_Operator(state, &peek_index, "=");       if define      == nil do return false
-	token_value := Token_Match(state, &peek_index, &Token{});           if token_value == nil do return false
+	target_token := Token_Match(state, &peek_index, &Token{});           if target_token == nil do return false
+	dot          := Token_Match_Operator(state, &peek_index, ".");       if dot          == nil do return false
+	field_name   := Token_Match(state, &peek_index, &Token{type = .Id}); if field_name   == nil do return false
 	
-	value  := token_force_value(token_value, scope, builder)
-	target := scope_lookup_force(scope, name.source, builder)
-	Assign(target, value)
+	target := token_force_value(target_token, scope, builder)
+	result := struct_get_field(target, field_name.source)
 	
-	// FIXME definition should rewrite with a token so that we can do proper
-	// checking inside statements and maybe pass it around.
-	token_replace_tokens_in_state(state, 3)
+	token_replace_tokens_in_state(state, 3, token_value_make(target_token, result))
+	return true
+}
+
+token_rewrite_assignments :: proc(state: ^Token_Matcher_State, scope: ^Scope, builder: ^Function_Builder) -> bool
+{
+	state.start_index = 0
+	lhs_end   := 0
+	rhs_start := 0
+	for token, i in state.tokens
+	{
+		if token.type == .Operator && token.source == "="
+		{
+			lhs_end = i
+			rhs_start = i + 1
+			break
+		}
+	}
+	
+	if lhs_end == 0 do return false
+	
+	rhs_slice := state.tokens[rhs_start:]
+	rhs := slice_as_dynamic(rhs_slice)
+	rhs_state: Token_Matcher_State = {tokens = &rhs}
+	
+	rhs_value := token_match_expression(&rhs_state, scope, builder)
+	
+	lhs_slice := state.tokens[:lhs_end]
+	lhs := slice_as_dynamic(lhs_slice)
+	lhs_state: Token_Matcher_State = {tokens = &lhs}
+	
+	token_rewrite_expression(&lhs_state, scope, builder, token_rewrite_struct_field)
+	assert(len(lhs_state.tokens) == 1, "Could not reduce lhs of assignment to 1 token")
+	token  := lhs_state.tokens[0]
+	target := token_force_value(token, scope, builder)
+	move_value(builder, target, rhs_value)
+	
+	token_replace_tokens_in_state(state, len(state.tokens))
 	return true
 }
 
@@ -1563,6 +1597,7 @@ token_match_expression :: proc(state: ^Token_Matcher_State, scope: ^Scope, build
 	token_rewrite_expression(state, scope, builder, token_rewrite_set_array_item)
 	token_rewrite_expression(state, scope, builder, token_rewrite_cast)
 	
+	token_rewrite_expression(state, scope, builder, token_rewrite_struct_field)
 	token_rewrite_expression(state, scope, builder, token_rewrite_functions)
 	token_rewrite_expression(state, scope, builder, token_rewrite_negative_literal)
 	token_rewrite_expression(state, scope, builder, token_rewrite_function_calls)
@@ -1585,7 +1620,7 @@ token_match_expression :: proc(state: ^Token_Matcher_State, scope: ^Scope, build
 		{
 			// Statement handling
 			token_rewrite_expression(state, scope, builder, token_rewrite_definition_and_assignment_statements)
-			token_rewrite_expression(state, scope, builder, token_rewrite_assignments)
+			token_rewrite_assignments(state, scope, builder)
 			token_rewrite_expression(state, scope, builder, token_rewrite_explicit_return)
 			token_rewrite_expression(state, scope, builder, token_rewrite_goto)
 			token_rewrite_expression(state, scope, builder, token_rewrite_constant_definitions)
@@ -1598,7 +1633,7 @@ token_match_expression :: proc(state: ^Token_Matcher_State, scope: ^Scope, build
 	}
 }
 
-token_force_lazy_function_definition :: proc(lazy_function_definition: ^Lazy_Function_Definition) -> ^Value
+token_force_lazy_function_definition :: proc(lazy_function_definition: ^Lazy_Function_Definition, builder: ^Function_Builder) -> ^Value
 {
 	args           := lazy_function_definition.args
 	return_types   := lazy_function_definition.return_types
@@ -1631,7 +1666,7 @@ token_force_lazy_function_definition :: proc(lazy_function_definition: ^Lazy_Fun
 			case 1:
 			{
 				return_type_token := return_types.children[0]
-				fn_return_descriptor(builder, token_force_type(function_scope, return_type_token), .Explicit)
+				fn_return_descriptor(builder, token_force_type(function_scope, return_type_token, builder), .Explicit)
 			}
 			case 2:
 			{

@@ -13,54 +13,6 @@ fn_reflect :: proc(builder: ^Function_Builder, descriptor: ^Descriptor) -> ^Valu
 	return result
 }
 
-ensure_memory :: proc(value: ^Value) -> ^Value
-{
-	operand := value.operand
-	if operand.type == .Memory_Indirect do return value
-	if value.descriptor.type != .Pointer do assert(false, "Not implemented")
-	if value.operand.type != .Register do assert(false, "Not implemented")
-	return new_clone(Value \
-	{
-		descriptor = value.descriptor.pointer_to,
-		operand =
-		{
-			type = .Memory_Indirect,
-			data = {indirect =
-			{
-				reg          = value.operand.reg,
-				displacement = 0,
-			}},
-		},
-	})
-}
-
-struct_get_field :: proc(struct_value: ^Value, name: string) -> ^Value
-{
-	struct_value := ensure_memory(struct_value)
-	descriptor := struct_value.descriptor
-	assert(descriptor.type == .Struct, "Can only get fields of structs")
-	for field in &descriptor.struct_.fields
-	{
-		if field.name == name
-		{
-			operand := struct_value.operand
-			// FIXME support more operands
-			assert(operand.type == .Memory_Indirect)
-			operand.indirect.displacement += field.offset
-			operand.byte_size = descriptor_byte_size(field.descriptor)
-			result := new_clone(Value \
-			{
-				descriptor = field.descriptor,
-				operand    = operand,
-			})
-			return result
-		}
-	}
-	
-	assert(false, "Could not find a field with specified name")
-	return nil
-}
-
 maybe_cast_to_tag :: proc(builder: ^Function_Builder, name: string, value: ^Value) -> ^Value
 {
 	assert(value.descriptor.type == .Pointer)

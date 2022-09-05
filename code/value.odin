@@ -504,7 +504,7 @@ descriptor_struct_make :: proc() -> ^Descriptor
 	return new_clone(Descriptor \
 	{
 		type = .Struct,
-		data = { struct_ =
+		data = {struct_ =
 		{
 			fields = make([dynamic]Descriptor_Struct_Field, 0, 16),
 		}},
